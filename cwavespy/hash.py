@@ -1,6 +1,6 @@
 import six
 
-from _cext import lib
+from ._cext import lib
 
 
 def secure_hash(msg):

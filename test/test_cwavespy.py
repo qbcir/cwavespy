@@ -4,10 +4,10 @@ from cwavespy import *
 
 
 # Values generated using https://silkmind.com/wallet2console/
-def test_address_from_seed():
+def test_priv_key_from_seed():
     seed = "wreck bonus pet equip wild tower vacuum creek ancient leaf present hobby brief dynamic captain"
-    addr = Address.from_seed(seed, 'W')
-    assert addr.b58_str == "3PBtvYFvtmHetYw2gyNavVfvLHcXgqdzJBN"
+    priv_key = PrivateKey.from_seed(seed)
+    assert priv_key.b58_str == "AAnJK1jCZLUNfbEB3WXqfnfDDSLtpprKnxB75gRoN3Tp"
 
 
 def test_pub_key_from_priv_key():

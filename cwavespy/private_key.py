@@ -1,6 +1,6 @@
 import six
 
-from _cext import lib
+from ._cext import lib
 from .base import _Base58BytesError, _Base58Bytes
 from .public_key import PublicKey
 from .signature import Signature
@@ -19,6 +19,14 @@ class PrivateKey(_Base58Bytes):
 
     def __init__(self, value):
         super(PrivateKey, self).__init__(value)
+
+    @classmethod
+    def from_seed(cls, seed):
+        _priv_key_bytes = bytes(cls.bytes_len)
+        if isinstance(seed, six.string_types):
+            seed = seed.encode()
+        lib.waves_gen_private_key(_priv_key_bytes, seed)
+        return cls(_priv_key_bytes)
 
     def gen_public_key(self):
         public_key_bytes = bytes(PublicKey.bytes_len)

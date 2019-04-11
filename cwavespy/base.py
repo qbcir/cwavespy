@@ -1,6 +1,6 @@
 import six
 
-from _cext import ffi, lib
+from ._cext import ffi, lib
 
 
 class Base58DecodeError(Exception):

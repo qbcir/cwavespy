@@ -1,6 +1,6 @@
 import six
 
-from _cext import lib
+from ._cext import lib
 
 from .base import _Base58BytesError, _Base58Bytes
 from .address import Address
