@@ -53,3 +53,9 @@ class _Base58Bytes(object):
     @property
     def b58_str(self):
         return self._value_b58
+
+
+def base58_encode(value):
+    buf = ffi.new("char[]", len(value) * 2)
+    ret = lib.base58_encode(buf, value, len(value))
+    return ffi.string(buf).decode()[0:ret]

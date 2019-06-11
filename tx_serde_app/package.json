@@ -1,0 +1,15 @@
+{
+  "name": "waves-tx-serde-app",
+  "version": "1.0.0",
+  "description": "App for testing waves transactions serialization",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@waves/waves-transactions": "^3.10.1",
+    "express": "^4.17.1"
+  }
+}
