@@ -2,9 +2,21 @@ import inspect
 import sys
 import binascii
 import base64
+import weakref
+
 import six
 
 from ._cext import ffi, lib
+
+_g_weakrefs = weakref.WeakKeyDictionary()
+
+
+def _add_strbuf(tx, val):
+    buf = ffi.new("char []", val)
+    if not _g_weakrefs.get(tx, None):
+        _g_weakrefs[tx] = []
+    _g_weakrefs[tx].append(buf)
+    return buf
 
 
 class TransactionField(object):
@@ -17,7 +29,7 @@ class TransactionField(object):
     def to_json(self, val):
         return val
 
-    def serialize(self, val):
+    def serialize(self, tx, val):
         return val
 
     def deserialize(self, val):
@@ -41,6 +53,61 @@ class OptionField(TransactionField):
         return self.field.validate(val)
 
 
+class StructField(TransactionField):
+    fields = []
+
+    def __init__(self, name):
+        super(StructField, self).__init__(name)
+
+    def validate(self, val):
+        for field in self.fields:
+            if not field.validate(val.get(field.name)):
+                return False
+        return True
+
+    def serialize(self, tx, val):
+        raw = {}
+        for field in self.fields:
+            fval_raw = field.serialize(tx, val.get(field.name))
+            raw[field.name] = fval_raw
+        return raw
+
+    def deserialize(self, val):
+        data = {}
+        for field in self.fields:
+            fval_raw = field.deserialize(getattr(val, field.name))
+            data[field.name] = fval_raw
+        return data
+
+
+class ArrayField(TransactionField):
+    def __init__(self, dtype, name):
+        super(ArrayField, self).__init__(name)
+        self.dtype = dtype
+
+    def validate(self, val):
+        for v in val:
+            if not self.dtype.validate(v):
+                return False
+        return True
+
+    def serialize(self, tx, val):
+        data = []
+        for v in val:
+            data.append(self.dtype.serialize(tx, v))
+        return {
+            'array': ffi.new("", data),
+            'len': len(data)
+        }
+
+    def deserialize(self, val):
+        data = []
+        for i in range(val.len):
+            fval = self.dtype.deserialze(val.array[i])
+            data.append(fval)
+        return data
+
+
 class Base58Field(TransactionField):
     def __init__(self, width, name):
         super(Base58Field, self).__init__(name)
@@ -53,15 +120,15 @@ class Base58Field(TransactionField):
         ret = lib.base58_decode(value_bytes, val.encode())
         return ret == self.width
 
-    def serialize(self, val):
-        value_bytes = bytes(self.width)
-        lib.base58_decode(value_bytes, val.encode())
-        return value_bytes
+    def serialize(self, tx, val):
+        return {
+            'data': _add_strbuf(tx, val.encode()),
+            'encoded_len': len(val),
+            'decoded_len': self.width
+        }
 
     def deserialize(self, val):
-        buf = ffi.new("char[]", len(val) * 2)
-        ret = lib.base58_encode(buf, val, len(val))
-        return ffi.string(buf).decode()[0:ret]
+        return ffi.string(val.data).decode()
 
 
 class AssetIdField(Base58Field):
@@ -85,6 +152,12 @@ class BoolField(TransactionField):
 
     def validate(self, val):
         return isinstance(val, bool)
+
+    def serialize(self, tx, val):
+        return 1 if val else 0
+
+    def deserialize(self, val):
+        return False if val == 0 else True
 
 
 class ByteField(TransactionField):
@@ -123,8 +196,15 @@ class StringField(TransactionField):
     def validate(self, val):
         return isinstance(val, str)
 
-    def serialize(self, val):
-        return {'data': ffi.new("char[]", val.encode()), 'len': len(val)}
+    def serialize(self, tx, val):
+        val_ = val.encode()
+        return {
+            'data': _add_strbuf(tx, val_),
+            'len': len(val_)
+        }
+
+    def deserialize(self, val):
+        return ffi.string(val.data).decode()
 
 
 class ChainIdField(ByteField):
@@ -162,26 +242,46 @@ class AmountField(LongField):
         super(AmountField, self).__init__(name)
 
 
+class AliasField(StructField):
+    fields = [
+        ChainIdField(),
+        StringField('alias')
+    ]
+
+    def __init__(self, name='alias'):
+        super(AliasField, self).__init__(name)
+
+
 class ScriptField(StringField):
     def __init__(self, name="script"):
         super(ScriptField, self).__init__(name)
 
     def validate(self, val):
-        try:
-            base64.b64decode(val, validate=True)
-            return True
-        except binascii.Error:
-            return False
+        return val is None or isinstance(val, str) or isinstance(val, bytes)
 
     def to_json(self, val):
+        if isinstance(val, bytes):
+            return val.decode()
         return val
 
-    def serialize(self, val):
+    def serialize(self, tx, val):
+        if val is None:
+            return {
+                'data': 0,
+                'encoded_len': 0,
+                'decode_len': 0
+            }
         val_ = base64.b64decode(val)
-        return {'data': ffi.new("char[]", val_), 'len': len(val_)}
+        return {
+            'data': _add_strbuf(tx, val.encode()),
+            'encoded_len': len(val),
+            'decoded_len': len(val_)
+        }
 
     def deserialize(self, val):
-        return base64.b64encode(val)
+        if val.encoded_len == 0:
+            return None
+        return ffi.string(val.data).decode()
 
 
 class DeserializeError(Exception):
@@ -191,7 +291,14 @@ class DeserializeError(Exception):
 class Transaction(object):
     tx_type = 0
     fields = []
-    name = None
+    tx_name = None
+
+    def to_dict(self):
+        data = {}
+        for field in self.fields:
+            fval = getattr(self, field.name)
+            data[field.name] = fval
+        return data
 
     @staticmethod
     def from_dict(data):
@@ -210,10 +317,10 @@ class Transaction(object):
     def serialize(self):
         tx = ffi.new("tx_bytes_t*")
         tx.type = self.tx_type
-        tx_data = ffi.addressof(tx.data, self.name)
+        tx_data = ffi.addressof(tx.data, self.tx_name)
         for field in self.fields:
             fval = getattr(self, field.name)
-            fval_raw = field.serialize(fval)
+            fval_raw = field.serialize(tx, fval)
             setattr(tx_data, field.name, fval_raw)
         buf_size = lib.waves_tx_buffer_size(tx)
         tx_buf = bytes(buf_size)
@@ -228,11 +335,11 @@ class Transaction(object):
             raise DeserializeError("No such transaction type: %d" % tx_type)
         tx = tx_cls()
         tx_bytes = ffi.new("tx_bytes_t*")
-        tx_data = ffi.addressof(tx_bytes.data, tx_cls.name)
+        tx_data = ffi.addressof(tx_bytes.data, tx_cls.tx_name)
         tx_bytes.type = tx_type
         ret = lib.waves_tx_from_bytes(tx_bytes, buf)
         if ret < 0:
-            raise DeserializeError("Can't deserialize '%s' transaction" % tx_cls.name)
+            raise DeserializeError("Can't deserialize '%s' transaction" % tx_cls.tx_name)
         for field in tx_cls.fields:
             fval_raw = getattr(tx_data, field.name)
             fval = field.deserialize(fval_raw)
@@ -241,14 +348,13 @@ class Transaction(object):
 
 
 class TransactionIssue(Transaction):
-    # TODO
     tx_type = 3
-    name = 'issue'
+    tx_name = 'issue'
     fields = (
         ChainIdField(),
         SenderPublicKeyField(),
-        StringField('asset_name'),
-        StringField('asset_description'),
+        StringField('name'),
+        StringField('description'),
         QuantityField(),
         DecimalsField(),
         ReissuableField(),
@@ -261,18 +367,26 @@ class TransactionIssue(Transaction):
 class TransactionTransfer(Transaction):
     # TODO
     tx_type = 4
-    name = 'transfer'
+    tx_name = 'transfer'
 
 
 class TransactionReissue(Transaction):
-    # TODO
     tx_type = 5
-    name = 'reissue'
+    tx_name = 'reissue'
+    fields = [
+        ChainIdField(),
+        SenderPublicKeyField(),
+        AssetIdField(),
+        QuantityField(),
+        ReissuableField(),
+        FeeField(),
+        TimestampField()
+    ]
 
 
 class TransactionBurn(Transaction):
     tx_type = 6
-    name = 'burn'
+    tx_name = 'burn'
     fields = (
         ChainIdField(),
         SenderPublicKeyField(),
@@ -286,18 +400,18 @@ class TransactionBurn(Transaction):
 class TransactionExchange(Transaction):
     # TODO
     tx_type = 7
-    name = 'exchange'
+    tx_name = 'exchange'
 
 
 class TransactionLease(Transaction):
     # TODO
     tx_type = 8
-    name = 'lease'
+    tx_name = 'lease'
 
 
 class TransactionLeaseCancel(Transaction):
     tx_type = 9
-    name = 'lease_cancel'
+    tx_name = 'lease_cancel'
     fields = (
         ChainIdField(),
         SenderPublicKeyField(),
@@ -308,26 +422,31 @@ class TransactionLeaseCancel(Transaction):
 
 
 class TransactionAlias(Transaction):
-    # TODO
     tx_type = 10
-    name = 'alias'
+    tx_name = 'alias'
+    fields = [
+        SenderPublicKeyField(),
+        AliasField(),
+        FeeField(),
+        TimestampField()
+    ]
 
 
 class TransactionMassTransfer(Transaction):
     # TODO
     tx_type = 11
-    name = 'mass_transfer'
+    tx_name = 'mass_transfer'
 
 
 class TransactionData(Transaction):
     # TODO
     tx_type = 12
-    name = 'data'
+    tx_name = 'data'
 
 
 class TransactionSetScript(Transaction):
     tx_type = 13
-    name = 'set_script'
+    tx_name = 'set_script'
     fields = (
         ChainIdField(),
         SenderPublicKeyField(),
@@ -339,11 +458,11 @@ class TransactionSetScript(Transaction):
 
 class TransactionSponsorship(Transaction):
     tx_type = 14
-    name = 'sponsorship'
+    tx_name = 'sponsorship'
     fields = (
         SenderPublicKeyField(),
         AssetIdField(),
-        FeeField(name='sponsored_asset_fee'),
+        FeeField(name='min_sponsored_asset_fee'),
         FeeField(),
         TimestampField()
     )
@@ -351,7 +470,7 @@ class TransactionSponsorship(Transaction):
 
 class TransactionSetAssetScript(Transaction):
     tx_type = 15
-    name = 'set_asset_script'
+    tx_name = 'set_asset_script'
     fields = (
         ChainIdField(),
         SenderPublicKeyField(),
@@ -365,7 +484,7 @@ class TransactionSetAssetScript(Transaction):
 class TransactionInvokeScript(Transaction):
     # TODO
     tx_type = 16
-    name = 'invoke_script'
+    tx_name = 'invoke_script'
 
 
 def _get_all_tx_types():

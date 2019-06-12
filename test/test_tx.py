@@ -27,7 +27,8 @@ class _TestRandProvider(BaseProvider):
         return self.random_int(min=0, max=(1 << 64)-1)
 
     def tx_chain_id(self):
-        return self.random_byte()
+        return ord('M')
+        #return self.random_byte()
 
     def tx_decimals(self):
         return self.random_byte()
@@ -50,6 +51,16 @@ class _TestRandProvider(BaseProvider):
         pub_key = PublicKey.from_private_key(priv_key)
         return pub_key.b58_str
 
+    def tx_address(self):
+        seed = g_faker.sentence()
+        priv_key = PrivateKey.from_seed(seed)
+        pub_key = PublicKey.from_private_key(priv_key)
+        addr = pub_key.to_address('M')
+        return addr.b58_str
+
+    def tx_address_or_alias(self):
+        pass
+
     def random_b58(self, width):
         bs = bytes(self.random_byte() for i in range(width))
         return base58_encode(bs)
@@ -61,21 +72,56 @@ class _TestRandProvider(BaseProvider):
         return self.random_b58(32)
 
     def tx_script(self):
-        return base64.b64encode(g_faker.sentence().encode())
+        s = base64.b64encode(g_faker.sentence().encode())
+        return s.decode()
+
+    def tx_reissuable(self):
+        #FIXME
+        return False#g_faker.boolean()
+
+    def tx_network_alias(self):
+        return g_faker.pystr(min_chars=0, max_chars=30)
+
+    def tx_alias_s(self):
+        return {
+            'chain_id': self.tx_chain_id(),
+            'alias': self.tx_network_alias()
+        }
+
+    def tx_alias(self):
+        return {
+            'type': TransactionAlias.tx_type,
+            'sender_public_key': self.tx_public_key(),
+            'alias': self.tx_alias_s(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
+        }
 
     def tx_issue(self):
         return {
             'type': TransactionIssue.tx_type,
             'chain_id': self.tx_chain_id(),
             'sender_public_key': self.tx_public_key(),
-            'asset_name': 'xxxx',#g_faker.sentence(),
-            'asset_description': 'XXXX',##g_faker.sentence(),
+            'name': g_faker.sentence(),
+            'description': g_faker.sentence(),
             'quantity': self.tx_quantity(),
             'decimals': self.tx_decimals(),
-            'reissuable': g_faker.boolean(),
+            'reissuable': self.tx_reissuable(),
             'fee': self.tx_fee(),
             'timestamp': self.tx_timestamp(),
             'script': self.tx_script()
+        }
+
+    def tx_reissue(self):
+        return {
+            'type': TransactionReissue.tx_type,
+            'chain_id': self.tx_chain_id(),
+            'sender_public_key': self.tx_public_key(),
+            'asset_id': self.tx_asset_id(),
+            'quantity': self.tx_quantity(),
+            'reissuable': self.tx_reissuable(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
         }
 
     def tx_burn(self):
@@ -85,6 +131,47 @@ class _TestRandProvider(BaseProvider):
             'sender_public_key': self.tx_public_key(),
             'asset_id': self.tx_asset_id(),
             'quantity': self.tx_quantity(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
+        }
+
+    def tx_sponsorship(self):
+        return {
+            'type': TransactionSponsorship.tx_type,
+            'sender_public_key': self.tx_public_key(),
+            'asset_id': self.tx_asset_id(),
+            'min_sponsored_asset_fee': self.tx_fee(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
+        }
+
+    def tx_lease_cancel(self):
+        return {
+            'type': TransactionLeaseCancel.tx_type,
+            'chain_id': self.tx_chain_id(),
+            'sender_public_key': self.tx_public_key(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp(),
+            'lease_id': self.tx_lease_id()
+        }
+
+    def tx_set_script(self):
+        return {
+            'type': TransactionSetScript.tx_type,
+            'chain_id': self.tx_chain_id(),
+            'sender_public_key': self.tx_public_key(),
+            'script': self.tx_script(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
+        }
+
+    def tx_set_asset_script(self):
+        return {
+            'type': TransactionSetAssetScript.tx_type,
+            'chain_id': self.tx_chain_id(),
+            'asset_id': self.tx_asset_id(),
+            'sender_public_key': self.tx_public_key(),
+            'script': self.tx_script(),
             'fee': self.tx_fee(),
             'timestamp': self.tx_timestamp()
         }
@@ -111,31 +198,72 @@ def _to_camel_case(val):
 
 
 def _to_serde_app_json(data):
-    return {_to_camel_case(k): str(v) for k,v in six.iteritems(data)}
+    if isinstance(data, dict):
+        data_ = {_to_camel_case(k): _to_serde_app_json(v) for k,v in six.iteritems(data)}
+        if 'chainId' in data_:
+            data_['chainId'] = 'M'
+        if 'alias' in data and isinstance(data['alias'], dict):
+            data_['chainId'] = 'M'
+            data_['alias'] = data['alias']['alias']
+        return data_
+    elif isinstance(data, bytes):
+        return data.decode()
+    else:
+        return str(data)
 
 
 def get_serialized_value(data):
-    resp = requests.post('http://127.0.0.1:3000/serialize', json=_to_serde_app_json(data))
-    print(resp.json())
-    return resp.json()['tx']
+    app_data = _to_serde_app_json(data)
+    print(app_data)
+    resp = requests.post('http://127.0.0.1:3000/serialize', json=app_data)
+    resp_json = resp.json()
+    if 'error' in resp_json:
+        print(resp_json['error'])
+    assert 'error' not in resp_json
+    print("Expected: ", resp_json['tx'])
+    return resp_json['bin']
+
+
+def _test_tx(_faker, cls):
+    gen_f = getattr(_faker, 'tx_%s' % cls.tx_name)
+    data = gen_f()
+    print("Generated:", data)
+    tx = Transaction.from_dict(data)
+    buf = tx.serialize()
+    expected = get_serialized_value(data)
+    tx2 = Transaction.deserialize(buf)
+    print("Deserialized:", tx2.to_dict())
+    assert expected == _bytes_to_hex(buf)
+    _check_tx_fields(tx2, data)
+
+
+def test_tx_alias(_faker):
+    _test_tx(_faker, TransactionAlias)
 
 
 def test_tx_burn(_faker):
-    data = _faker.tx_burn()
-    tx = Transaction.from_dict(data)
-    buf = tx.serialize()
-    expected = get_serialized_value(data)
-    assert expected == _bytes_to_hex(buf)
-    tx2 = Transaction.deserialize(buf)
-    _check_tx_fields(tx2, data)
+    _test_tx(_faker, TransactionBurn)
 
 
 def test_tx_issue(_faker):
-    data = _faker.tx_issue()
-    print(data)
-    tx = Transaction.from_dict(data)
-    buf = tx.serialize()
-    expected = get_serialized_value(data)
-    assert expected == _bytes_to_hex(buf)
-    tx2 = Transaction.deserialize(buf)
-    _check_tx_fields(tx2, data)
+    _test_tx(_faker, TransactionIssue)
+
+
+def test_tx_reissue(_faker):
+    _test_tx(_faker, TransactionReissue)
+
+
+def test_tx_sponsorship(_faker):
+    _test_tx(_faker, TransactionSponsorship)
+
+
+def test_tx_lease_cancel(_faker):
+    _test_tx(_faker, TransactionLeaseCancel)
+
+
+def test_tx_set_script(_faker):
+    _test_tx(_faker, TransactionSetScript)
+
+
+def test_tx_set_asset_script(_faker):
+    _test_tx(_faker, TransactionSetAssetScript)

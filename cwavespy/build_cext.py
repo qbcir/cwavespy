@@ -26,17 +26,29 @@ typedef uint64_t tx_quantity_t;
 typedef uint64_t tx_timestamp_t;
 typedef uint64_t tx_amount_t;
 typedef bool tx_reissuable_t;
-typedef unsigned char tx_public_key_bytes_t [32];
-typedef unsigned char tx_asset_id_bytes_t [32];
-typedef unsigned char tx_lease_id_bytes_t [32];
-typedef unsigned char tx_lease_asset_id_bytes_t [32];
-typedef char tx_alias_str_t [31];
-typedef unsigned char tx_rcpt_addr_bytes_t [26];
+
+typedef struct tx_encoded_string_s {
+    char* data;
+    size_t encoded_len;
+    size_t decoded_len;
+} tx_encoded_string_t;
+
+typedef struct tx_string_s
+{
+    char* data;
+    uint16_t len;
+} tx_string_t;
+
+typedef tx_encoded_string_t tx_public_key_t;
+typedef tx_encoded_string_t tx_asset_id_t;
+typedef tx_encoded_string_t tx_lease_id_t;
+typedef tx_encoded_string_t tx_lease_asset_id_t;
+typedef tx_encoded_string_t tx_address_t;
 
 typedef struct tx_optional_asset_id_s
 {
     uint8_t valid;
-    tx_asset_id_bytes_t data;
+    tx_asset_id_t asset_id;
 } tx_optional_asset_id_t;
 
 enum
@@ -69,31 +81,26 @@ enum
 typedef struct tx_alias_s
 {
     tx_chain_id_t chain_id;
-    tx_alias_str_t alias;
+    tx_string_t alias;
 } tx_alias_t;
 
-typedef struct tx_rcpt_addr_or_alias_s
+typedef struct tx_addr_or_alias_s
 {
     bool is_alias;
     union
     {
-        tx_rcpt_addr_bytes_t address;
+        tx_address_t address;
         tx_alias_t alias;
     } data;
-} tx_rcpt_addr_or_alias_t;
+} tx_addr_or_alias_t;
 
 typedef uint16_t tx_size_t;
 typedef uint64_t tx_data_integer_t;
 typedef uint8_t tx_data_boolean_t;
+typedef tx_string_t tx_data_string_t;
 
-typedef struct tx_data_string_s
-{
-    char* data;
-    uint16_t len;
-} tx_data_string_t;
-
-typedef tx_data_string_t tx_script_t;
-typedef tx_data_string_t tx_attachment_t;
+typedef tx_encoded_string_t tx_script_t;
+typedef tx_encoded_string_t tx_attachment_t;
 
 enum
 {
@@ -116,7 +123,7 @@ typedef struct tx_data_s
 
 typedef struct tx_data_entry_s
 {
-    tx_data_string_t key;
+    tx_string_t key;
     tx_data_t value;
 } tx_data_entry_t;
 
@@ -141,7 +148,7 @@ typedef struct tx_payment_array_s
 
 typedef struct tx_transfer_s
 {
-    tx_rcpt_addr_or_alias_t recepient;
+    tx_addr_or_alias_t recepient;
     tx_amount_t amount;
 } tx_transfer_t;
 
@@ -183,7 +190,7 @@ typedef struct tx_func_arg_s
 typedef struct tx_func_arg_array_s
 {
     uint32_t len;
-    tx_func_arg_t* arr;
+    tx_func_arg_t* array;
 } tx_func_arg_array_t;
 
 typedef struct tx_func_call_s
@@ -194,8 +201,7 @@ typedef struct tx_func_call_s
 
 typedef struct alias_tx_bytes_s
 {
-    tx_public_key_bytes_t sender_public_key;
-    tx_size_t alias_length;
+    tx_public_key_t sender_public_key;
     tx_alias_t alias;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
@@ -204,8 +210,8 @@ typedef struct alias_tx_bytes_s
 typedef struct burn_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
-    tx_asset_id_bytes_t asset_id;
+    tx_public_key_t sender_public_key;
+    tx_asset_id_t asset_id;
     tx_quantity_t quantity;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
@@ -213,7 +219,7 @@ typedef struct burn_tx_bytes_s
 
 typedef struct data_tx_bytes_s
 {
-    tx_public_key_bytes_t sender_public_key;
+    tx_public_key_t sender_public_key;
     tx_data_entry_array_t data;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
@@ -222,17 +228,17 @@ typedef struct data_tx_bytes_s
 typedef struct lease_cancel_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
+    tx_public_key_t sender_public_key;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
-    tx_lease_id_bytes_t lease_id;
+    tx_lease_id_t lease_id;
 } lease_cancel_tx_bytes_t;
 
 typedef struct lease_tx_bytes_s
 {
-    tx_lease_asset_id_bytes_t lease_asset_id;
-    tx_public_key_bytes_t sender_public_key;
-    tx_rcpt_addr_or_alias_t rcpt_addr_or_alias;
+    tx_lease_asset_id_t lease_asset_id;
+    tx_public_key_t sender_public_key;
+    tx_addr_or_alias_t addr_or_alias;
     uint64_t amount;
     uint64_t fee;
     uint64_t timestamp;
@@ -240,20 +246,20 @@ typedef struct lease_tx_bytes_s
 
 typedef struct mass_transfer_tx_bytes_s
 {
-    tx_public_key_bytes_t sender_public_key;
+    tx_public_key_t sender_public_key;
     tx_optional_asset_id_t asset_id;
     tx_transfer_array_t transfers;
     tx_timestamp_t timestamp;
     tx_fee_t fee;
-    tx_data_string_t attachment;
+    tx_string_t attachment;
 } mass_transfer_tx_bytes_t;
 
 typedef struct issue_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
-    tx_data_string_t asset_name;
-    tx_data_string_t asset_description;
+    tx_public_key_t sender_public_key;
+    tx_string_t name;
+    tx_string_t description;
     tx_quantity_t quantity;
     tx_decimals_t decimals;
     tx_reissuable_t reissuable;
@@ -265,8 +271,8 @@ typedef struct issue_tx_bytes_s
 typedef struct reissue_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
-    tx_asset_id_bytes_t asset_id;
+    tx_public_key_t sender_public_key;
+    tx_asset_id_t asset_id;
     tx_quantity_t quantity;
     tx_reissuable_t reissuable;
     tx_fee_t fee;
@@ -276,8 +282,8 @@ typedef struct reissue_tx_bytes_s
 typedef struct set_asset_script_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
-    tx_asset_id_bytes_t asset_id;
+    tx_public_key_t sender_public_key;
+    tx_asset_id_t asset_id;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
     tx_script_t script;
@@ -286,7 +292,7 @@ typedef struct set_asset_script_tx_bytes_s
 typedef struct set_script_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
+    tx_public_key_t sender_public_key;
     tx_script_t script;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
@@ -294,9 +300,9 @@ typedef struct set_script_tx_bytes_s
 
 typedef struct sponsorship_tx_bytes_s
 {
-    tx_public_key_bytes_t sender_public_key;
-    tx_asset_id_bytes_t asset_id;
-    tx_fee_t sponsored_asset_fee;
+    tx_public_key_t sender_public_key;
+    tx_asset_id_t asset_id;
+    tx_fee_t min_sponsored_asset_fee;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
 } sponsorship_tx_bytes_t;
@@ -304,8 +310,8 @@ typedef struct sponsorship_tx_bytes_s
 typedef struct invoke_script_tx_bytes_s
 {
     tx_chain_id_t chain_id;
-    tx_public_key_bytes_t sender_public_key;
-    tx_rcpt_addr_or_alias_t dapp;
+    tx_public_key_t sender_public_key;
+    tx_addr_or_alias_t dapp;
     tx_func_call_t function_call;
     tx_payment_array_t payments;
     tx_fee_t fee;
@@ -315,14 +321,14 @@ typedef struct invoke_script_tx_bytes_s
 
 typedef struct transfer_tx_bytes_s
 {
-    tx_public_key_bytes_t sender_public_key;
+    tx_public_key_t sender_public_key;
     tx_optional_asset_id_t asset_id;
     tx_optional_asset_id_t fee_asset_id;
     tx_timestamp_t timestamp;
     tx_amount_t amount;
     tx_fee_t fee;
-    tx_rcpt_addr_or_alias_t recepient;
-    tx_data_string_t attachment;
+    tx_addr_or_alias_t recepient;
+    tx_string_t attachment;
 } transfer_tx_bytes_t;
 
 typedef struct tx_bytes_s
