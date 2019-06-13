@@ -58,9 +58,6 @@ class _TestRandProvider(BaseProvider):
         addr = pub_key.to_address('M')
         return addr.b58_str
 
-    def tx_address_or_alias(self):
-        pass
-
     def random_b58(self, width):
         bs = bytes(self.random_byte() for i in range(width))
         return base58_encode(bs)
@@ -74,6 +71,13 @@ class _TestRandProvider(BaseProvider):
     def tx_script(self):
         s = base64.b64encode(g_faker.sentence().encode())
         return s.decode()
+
+    def tx_recipient(self):
+        is_alias = g_faker.boolean()
+        if is_alias:
+            return {'is_alias': is_alias, 'data': {'alias': self.tx_alias_s()}}
+        else:
+            return {'is_alias': is_alias, 'data': {'address': self.tx_address()}}
 
     def tx_reissuable(self):
         #FIXME
@@ -131,6 +135,17 @@ class _TestRandProvider(BaseProvider):
             'sender_public_key': self.tx_public_key(),
             'asset_id': self.tx_asset_id(),
             'quantity': self.tx_quantity(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
+        }
+
+    def tx_lease(self):
+        return {
+            'type': TransactionLease.tx_type,
+            'lease_asset_id': None,#self.tx_asset_id(),
+            'sender_public_key': self.tx_public_key(),
+            'recipient': self.tx_recipient(),
+            'amount': self.tx_amount(),
             'fee': self.tx_fee(),
             'timestamp': self.tx_timestamp()
         }
@@ -205,6 +220,12 @@ def _to_serde_app_json(data):
         if 'alias' in data and isinstance(data['alias'], dict):
             data_['chainId'] = 'M'
             data_['alias'] = data['alias']['alias']
+        if 'recipient' in data:
+            rcpt_data = data['recipient']['data']
+            if data['recipient']['is_alias']:
+                data_['recipient'] = 'alias:%s:%s' % (rcpt_data['chainId'], rcpt_data['alias'])
+            else:
+                data_['recipient'] = rcpt_data['address']
         return data_
     elif isinstance(data, bytes):
         return data.decode()
@@ -243,6 +264,10 @@ def test_tx_alias(_faker):
 
 def test_tx_burn(_faker):
     _test_tx(_faker, TransactionBurn)
+
+
+def test_tx_lease(_faker):
+    _test_tx(_faker, TransactionLease)
 
 
 def test_tx_issue(_faker):

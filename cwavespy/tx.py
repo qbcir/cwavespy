@@ -35,22 +35,38 @@ class TransactionField(object):
     def deserialize(self, val):
         return val
 
+    def null(self):
+        return 0
+
+    def is_null(self, val):
+        return True
+
 
 def _check_uint(val, bits):
     return isinstance(val, int) and 0 <= val < (1 << bits)
 
 
 class OptionField(TransactionField):
-    def __init__(self, field, name):
-        super(OptionField, self).__init__(name)
+    def __init__(self, field, name=None):
         if not isinstance(field, TransactionField):
             raise TypeError("Expected type TransactionField, got %s" % type(field).__name__)
+        super(OptionField, self).__init__(name or field.name)
         self.field = field
 
     def validate(self, val):
         if val is None:
             return True
         return self.field.validate(val)
+
+    def serialize(self, tx, val):
+        if val is None:
+            return self.field.null()
+        return self.field.serialize(tx, val)
+
+    def deserialize(self, val):
+        if self.field.is_null(val):
+            return None
+        return self.field.deserialize(val)
 
 
 class StructField(TransactionField):
@@ -116,24 +132,59 @@ class Base58Field(TransactionField):
     def validate(self, val):
         if not isinstance(val, six.string_types):
             return False
-        value_bytes = bytes(self.width)
-        ret = lib.base58_decode(value_bytes, val.encode())
-        return ret == self.width
+        if self.width is None:
+            val_ = val.encode()
+            value_bytes = bytes(len(val_))
+            ret = lib.base58_decode(value_bytes, val_)
+            return ret >= 0
+        else:
+            value_bytes = bytes(self.width)
+            ret = lib.base58_decode(value_bytes, val.encode())
+            return ret == self.width
 
     def serialize(self, tx, val):
+        encoded_data = val.encode()
+        if self.width is None:
+            decoded_data = bytes(len(encoded_data))
+            ret = lib.base58_decode(decoded_data, encoded_data)
+            if ret < 0:
+                raise ValueError()
+            return {
+                'encoded_data': _add_strbuf(tx, encoded_data),
+                'decoded_data': _add_strbuf(tx, decoded_data[0:ret]),
+                'encoded_len': len(encoded_data),
+                'decoded_len': ret
+            }
         return {
-            'data': _add_strbuf(tx, val.encode()),
-            'encoded_len': len(val),
+            'encoded_data': _add_strbuf(tx, encoded_data),
+            'decoded_data': ffi.NULL,
+            'encoded_len': len(encoded_data),
             'decoded_len': self.width
         }
 
     def deserialize(self, val):
-        return ffi.string(val.data).decode()
+        return ffi.string(val.encoded_data).decode()
+
+    def null(self):
+        return {
+            'encoded_data': ffi.NULL,
+            'decoded_data': ffi.NULL,
+            'encoded_len': 0,
+            'decoded_len': 0
+        }
+
+    def is_null(self, val):
+        return val.encoded_data == ffi.NULL
 
 
 class AssetIdField(Base58Field):
     def __init__(self, name='asset_id'):
         super(AssetIdField, self).__init__(32, name)
+
+
+class LeaseAssetIdField(OptionField):
+    def __init__(self, name='lease_asset_id'):
+        super(LeaseAssetIdField, self).__init__(field=Base58Field(32, name), name=name)
 
 
 class LeaseIdField(Base58Field):
@@ -144,6 +195,11 @@ class LeaseIdField(Base58Field):
 class SenderPublicKeyField(Base58Field):
     def __init__(self, name='sender_public_key'):
         super(SenderPublicKeyField, self).__init__(32, name)
+
+
+class AttachmentField(Base58Field):
+    def __init__(self, name='attachment'):
+        super(AttachmentField, self).__init__(width=None, name=name)
 
 
 class BoolField(TransactionField):
@@ -252,6 +308,54 @@ class AliasField(StructField):
         super(AliasField, self).__init__(name)
 
 
+class RecipientField(TransactionField):
+    def __init__(self, name='recipient'):
+        super(RecipientField, self).__init__(name)
+        self.address_field = Base58Field(width=26, name='address')
+        self.alias_field = AliasField()
+
+    def validate(self, val):
+        if isinstance(val, dict):
+            if val.get('is_alias', False):
+                return self.alias_field.validate(val['data']['alias'])
+            else:
+                return self.address_field.validate(val['data']['address'])
+        return False
+
+    def deserialize(self, val):
+        if val.is_alias:
+            data = {'alias': self.alias_field.deserialize(val.data.alias)}
+        else:
+            data = {'address': self.address_field.deserialize(val.data.address)}
+        return {'is_alias': val.is_alias, 'data':data}
+
+    def serialize(self, tx, val):
+        if isinstance(val, six.string_types):
+            return {
+                'is_alias': False,
+                'data': {
+                    'address': self.address_field.serialize(tx, val)
+                }
+            }
+        elif isinstance(val, dict):
+            is_alias = val.get('is_alias', False)
+            if is_alias:
+                alias_data = {'alias': self.alias_field.serialize(tx, val['data']['alias'])}
+            else:
+                alias_data = {'address': self.address_field.serialize(tx, val['data']['address'])}
+            return {
+                'is_alias': is_alias,
+                'data': alias_data
+            }
+        else:
+            return {
+                'is_alias': True,
+                'data': {
+                    'alias': self.alias_field.serialize(tx, val)
+                }
+            }
+
+
 class ScriptField(StringField):
     def __init__(self, name="script"):
         super(ScriptField, self).__init__(name)
@@ -267,21 +371,24 @@ class ScriptField(StringField):
     def serialize(self, tx, val):
         if val is None:
             return {
-                'data': 0,
+                'encoded_data': ffi.NULL,
+                'decoded_data': ffi.NULL,
                 'encoded_len': 0,
-                'decode_len': 0
+                'decoded_len': 0
             }
-        val_ = base64.b64decode(val)
+        encoded_val = val.encode()
+        decoded_val = base64.b64decode(val)
         return {
-            'data': _add_strbuf(tx, val.encode()),
-            'encoded_len': len(val),
-            'decoded_len': len(val_)
+            'encoded_data': _add_strbuf(tx, encoded_val),
+            'decoded_data': _add_strbuf(tx, decoded_val),
+            'encoded_len': len(encoded_val),
+            'decoded_len': len(decoded_val)
         }
 
     def deserialize(self, val):
         if val.encoded_len == 0:
             return None
-        return ffi.string(val.data).decode()
+        return ffi.string(val.encoded_data).decode()
 
 
 class DeserializeError(Exception):
@@ -368,6 +475,16 @@ class TransactionTransfer(Transaction):
     # TODO
     tx_type = 4
     tx_name = 'transfer'
+    fields = (
+        SenderPublicKeyField(),
+        OptionField(field=AssetIdField()),
+        OptionField(field=AssetIdField(), name='fee_asset_id'),
+        TimestampField(),
+        AmountField(),
+        FeeField(),
+        RecipientField(),
+        AttachmentField()
+    )
 
 
 class TransactionReissue(Transaction):
@@ -404,9 +521,16 @@ class TransactionExchange(Transaction):
 
 
 class TransactionLease(Transaction):
-    # TODO
     tx_type = 8
     tx_name = 'lease'
+    fields = (
+        LeaseAssetIdField(),
+        SenderPublicKeyField(),
+        RecipientField(),
+        AmountField(),
+        FeeField(),
+        TimestampField()
+    )
 
 
 class TransactionLeaseCancel(Transaction):

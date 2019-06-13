@@ -28,7 +28,8 @@ typedef uint64_t tx_amount_t;
 typedef bool tx_reissuable_t;
 
 typedef struct tx_encoded_string_s {
-    char* data;
+    char* encoded_data;
+    char* decoded_data;
     size_t encoded_len;
     size_t decoded_len;
 } tx_encoded_string_t;
@@ -44,12 +45,6 @@ typedef tx_encoded_string_t tx_asset_id_t;
 typedef tx_encoded_string_t tx_lease_id_t;
 typedef tx_encoded_string_t tx_lease_asset_id_t;
 typedef tx_encoded_string_t tx_address_t;
-
-typedef struct tx_optional_asset_id_s
-{
-    uint8_t valid;
-    tx_asset_id_t asset_id;
-} tx_optional_asset_id_t;
 
 enum
 {
@@ -137,7 +132,7 @@ typedef struct tx_payment_s
 {
     tx_size_t length;
     tx_amount_t amount;
-    tx_optional_asset_id_t asset_id;
+    tx_asset_id_t asset_id;
 } tx_payment_t;
 
 typedef struct tx_payment_array_s
@@ -238,7 +233,7 @@ typedef struct lease_tx_bytes_s
 {
     tx_lease_asset_id_t lease_asset_id;
     tx_public_key_t sender_public_key;
-    tx_addr_or_alias_t addr_or_alias;
+    tx_addr_or_alias_t recipient;
     uint64_t amount;
     uint64_t fee;
     uint64_t timestamp;
@@ -247,7 +242,7 @@ typedef struct lease_tx_bytes_s
 typedef struct mass_transfer_tx_bytes_s
 {
     tx_public_key_t sender_public_key;
-    tx_optional_asset_id_t asset_id;
+    tx_asset_id_t asset_id;
     tx_transfer_array_t transfers;
     tx_timestamp_t timestamp;
     tx_fee_t fee;
@@ -315,19 +310,19 @@ typedef struct invoke_script_tx_bytes_s
     tx_func_call_t function_call;
     tx_payment_array_t payments;
     tx_fee_t fee;
-    tx_optional_asset_id_t fee_asset_id;
+    tx_asset_id_t fee_asset_id;
     tx_timestamp_t timestamp;
 } invoke_script_tx_bytes_t;
 
 typedef struct transfer_tx_bytes_s
 {
     tx_public_key_t sender_public_key;
-    tx_optional_asset_id_t asset_id;
-    tx_optional_asset_id_t fee_asset_id;
+    tx_asset_id_t asset_id;
+    tx_asset_id_t fee_asset_id;
     tx_timestamp_t timestamp;
     tx_amount_t amount;
     tx_fee_t fee;
-    tx_addr_or_alias_t recepient;
+    tx_addr_or_alias_t recipient;
     tx_string_t attachment;
 } transfer_tx_bytes_t;
 
