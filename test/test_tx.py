@@ -68,6 +68,10 @@ class _TestRandProvider(BaseProvider):
     def tx_lease_id(self):
         return self.random_b58(32)
 
+    def tx_attachment(self):
+        rlen = g_faker.random_int(min=0, max=1024)
+        return self.random_b58(rlen)
+
     def tx_script(self):
         s = base64.b64encode(g_faker.sentence().encode())
         return s.decode()
@@ -100,6 +104,19 @@ class _TestRandProvider(BaseProvider):
             'fee': self.tx_fee(),
             'timestamp': self.tx_timestamp()
         }
+
+    def tx_transfer(self):
+        return {
+            'type': TransactionTransfer.tx_type,
+            'sender_public_key': self.tx_public_key(),
+            'asset_id': self.tx_asset_id(),
+            'fee_asset_id': self.tx_asset_id(),
+            'timestamp': self.tx_timestamp(),
+            'amount': self.tx_amount(),
+            'fee': self.tx_fee(),
+            'recipient': self.tx_recipient(),
+            'attachment': self.tx_attachment()
+         }
 
     def tx_issue(self):
         return {
@@ -142,6 +159,7 @@ class _TestRandProvider(BaseProvider):
     def tx_lease(self):
         return {
             'type': TransactionLease.tx_type,
+            #FIXME
             'lease_asset_id': None,#self.tx_asset_id(),
             'sender_public_key': self.tx_public_key(),
             'recipient': self.tx_recipient(),
@@ -223,7 +241,7 @@ def _to_serde_app_json(data):
         if 'recipient' in data:
             rcpt_data = data['recipient']['data']
             if data['recipient']['is_alias']:
-                data_['recipient'] = 'alias:%s:%s' % (rcpt_data['chainId'], rcpt_data['alias'])
+                data_['recipient'] = 'alias:%s:%s' % (chr(rcpt_data['alias']['chain_id']), rcpt_data['alias']['alias'])
             else:
                 data_['recipient'] = rcpt_data['address']
         return data_
@@ -260,6 +278,10 @@ def _test_tx(_faker, cls):
 
 def test_tx_alias(_faker):
     _test_tx(_faker, TransactionAlias)
+
+
+def test_tx_transfer(_faker):
+    _test_tx(_faker, TransactionTransfer)
 
 
 def test_tx_burn(_faker):

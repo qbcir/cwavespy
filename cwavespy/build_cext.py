@@ -246,7 +246,7 @@ typedef struct mass_transfer_tx_bytes_s
     tx_transfer_array_t transfers;
     tx_timestamp_t timestamp;
     tx_fee_t fee;
-    tx_string_t attachment;
+    tx_encoded_string_t attachment;
 } mass_transfer_tx_bytes_t;
 
 typedef struct issue_tx_bytes_s
@@ -323,7 +323,7 @@ typedef struct transfer_tx_bytes_s
     tx_amount_t amount;
     tx_fee_t fee;
     tx_addr_or_alias_t recipient;
-    tx_string_t attachment;
+    tx_encoded_string_t attachment;
 } transfer_tx_bytes_t;
 
 typedef struct tx_bytes_s
