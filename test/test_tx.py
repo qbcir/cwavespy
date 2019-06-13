@@ -96,6 +96,15 @@ class _TestRandProvider(BaseProvider):
             'alias': self.tx_network_alias()
         }
 
+    def tx_transfer_s(self):
+        return {
+            'recipient': self.tx_recipient(),
+            'amount': self.tx_amount()
+        }
+
+    def tx_transfers(self, n):
+        return [self.tx_transfer_s() for i in range(n)]
+
     def tx_alias(self):
         return {
             'type': TransactionAlias.tx_type,
@@ -117,6 +126,17 @@ class _TestRandProvider(BaseProvider):
             'recipient': self.tx_recipient(),
             'attachment': self.tx_attachment()
          }
+
+    def tx_mass_transfer(self):
+        return {
+            'type': TransactionMassTransfer.tx_type,
+            'sender_public_key': self.tx_public_key(),
+            'asset_id': self.tx_asset_id(),
+            'transfers': self.tx_transfers(32),
+            'timestamp': self.tx_timestamp(),
+            'fee': self.tx_fee(),
+            'attachment': self.tx_attachment()
+        }
 
     def tx_issue(self):
         return {
@@ -245,6 +265,9 @@ def _to_serde_app_json(data):
             else:
                 data_['recipient'] = rcpt_data['address']
         return data_
+    elif isinstance(data, list):
+        data_ = [_to_serde_app_json(v) for v in data]
+        return data_
     elif isinstance(data, bytes):
         return data.decode()
     else:
@@ -282,6 +305,10 @@ def test_tx_alias(_faker):
 
 def test_tx_transfer(_faker):
     _test_tx(_faker, TransactionTransfer)
+
+
+def test_tx_mass_transfer(_faker):
+    _test_tx(_faker, TransactionMassTransfer)
 
 
 def test_tx_burn(_faker):

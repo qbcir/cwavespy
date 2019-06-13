@@ -11,12 +11,16 @@ from ._cext import ffi, lib
 _g_weakrefs = weakref.WeakKeyDictionary()
 
 
-def _add_strbuf(tx, val):
-    buf = ffi.new("char []", val)
+def _tx_add_buf(tx, dtype, val):
+    buf = ffi.new(dtype, val)
     if not _g_weakrefs.get(tx, None):
         _g_weakrefs[tx] = []
     _g_weakrefs[tx].append(buf)
     return buf
+
+
+def _add_strbuf(tx, val):
+    return _tx_add_buf(tx, "char[]", val)
 
 
 class TransactionField(object):
@@ -71,6 +75,7 @@ class OptionField(TransactionField):
 
 class StructField(TransactionField):
     fields = []
+    ctype = None
 
     def __init__(self, name):
         super(StructField, self).__init__(name)
@@ -112,14 +117,14 @@ class ArrayField(TransactionField):
         for v in val:
             data.append(self.dtype.serialize(tx, v))
         return {
-            'array': ffi.new("", data),
+            'array': _tx_add_buf(tx, "%s[%d]" % (self.dtype.ctype, len(data)), data),
             'len': len(data)
         }
 
     def deserialize(self, val):
         data = []
         for i in range(val.len):
-            fval = self.dtype.deserialze(val.array[i])
+            fval = self.dtype.deserialize(val.array[i])
             data.append(fval)
         return data
 
@@ -356,6 +361,17 @@ class RecipientField(TransactionField):
             }
 
 
+class TransferField(StructField):
+    ctype = 'tx_transfer_t'
+    fields = (
+        RecipientField(),
+        AmountField()
+    )
+
+    def __init__(self, name='transfer'):
+        super(TransferField, self).__init__(name)
+
+
 class ScriptField(StringField):
     def __init__(self, name="script"):
         super(ScriptField, self).__init__(name)
@@ -472,7 +488,6 @@ class TransactionIssue(Transaction):
 
 
 class TransactionTransfer(Transaction):
-    # TODO
     tx_type = 4
     tx_name = 'transfer'
     fields = (
@@ -557,9 +572,16 @@ class TransactionAlias(Transaction):
 
 
 class TransactionMassTransfer(Transaction):
-    # TODO
     tx_type = 11
     tx_name = 'mass_transfer'
+    fields = (
+        SenderPublicKeyField(),
+        OptionField(AssetIdField(), name='asset_id'),
+        ArrayField(dtype=TransferField(), name='transfers'),
+        TimestampField(),
+        FeeField(),
+        AttachmentField()
+    )
 
 
 class TransactionData(Transaction):
