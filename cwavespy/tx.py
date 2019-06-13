@@ -30,7 +30,7 @@ class TransactionField(object):
     def validate(self, val):
         return False
 
-    def to_json(self, val):
+    def from_dict(self, val):
         return val
 
     def serialize(self, tx, val):
@@ -127,6 +127,35 @@ class ArrayField(TransactionField):
             fval = self.dtype.deserialize(val.array[i])
             data.append(fval)
         return data
+
+
+class Base64Field(TransactionField):
+    def __init__(self, name):
+        super(Base64Field, self).__init__(name)
+
+    def validate(self, val):
+        if not isinstance(val, six.string_types):
+            return False
+        val_ = val.encode()
+        value_bytes = bytes(len(val_))
+        ret = lib.base64_decode(value_bytes, val_)
+        return ret >= 0
+
+    def serialize(self, tx, val):
+        encoded_data = val.encode()
+        decoded_data = bytes(len(encoded_data))
+        ret = lib.base64_decode(decoded_data, encoded_data)
+        if ret < 0:
+            raise ValueError()
+        return {
+            'encoded_data': _add_strbuf(tx, encoded_data),
+            'decoded_data': _add_strbuf(tx, decoded_data[0:ret]),
+            'encoded_len': len(encoded_data),
+            'decoded_len': ret
+        }
+
+    def deserialize(self, val):
+        return ffi.string(val.encoded_data).decode()
 
 
 class Base58Field(TransactionField):
@@ -362,6 +391,7 @@ class RecipientField(TransactionField):
 
 
 class TransferField(StructField):
+
     ctype = 'tx_transfer_t'
     fields = (
         RecipientField(),
@@ -372,6 +402,62 @@ class TransferField(StructField):
         super(TransferField, self).__init__(name)
 
 
+class DataField(TransactionField):
+    py_types = [int, bool, bytes, str]
+
+    def __init__(self, name):
+        self.string_field = StringField(name='string')
+        self.binary_field = Base64Field(name='binary')
+        super(DataField, self).__init__(name)
+
+    def validate(self, val):
+        if not any(isinstance(val, t) for t in self.py_types):
+            return False
+        return True
+
+    def serialize(self, tx, val):
+        if isinstance(val, int):
+            return {'data_type': 0, 'types': {'integer': val}}
+        elif isinstance(val, bool):
+            return {'data_type': 1, 'types': {'boolean': val}}
+        elif isinstance(val, str):
+            val_ = self.string_field.serialize(tx, val)
+            return {'data_type': 3, 'types': {'string': val_}}
+        elif isinstance(val, bytes):
+            value_bytes = bytes(len(val)*2)
+            ret = lib.base64_encode(value_bytes, val, len(val))
+            val_ = {
+                'encoded_data': _add_strbuf(tx, value_bytes[0:ret]),
+                'decoded_data': _add_strbuf(tx, val),
+                'encoded_len': ret,
+                'decoded_len': len(val)
+            }
+            return {'data_type': 3, 'types': {'binary': val_}}
+
+    def deserialize(self, val):
+        if val.data_type == 0:
+            return int(val.types.integer)
+        elif val.data_type == 1:
+            return bool(val.types.boolean)
+        elif val.data_type == 2:
+            return ffi.string(val.decoded_data)
+        elif val.data_type == 3:
+            return ffi.string(val.types.string.data).decode()
+
+
+class DataKeyValueField(StructField):
+    ctype = 'tx_data_entry_t'
+    fields = (
+        StringField(name='key'),
+        DataField(name='value')
+    )
+
+
+class DataArrayField(ArrayField):
+    def __init__(self, name='data'):
+        super(DataArrayField, self).__init__(DataKeyValueField(name='data_entry'), name)
+
+
 class ScriptField(StringField):
     def __init__(self, name="script"):
         super(ScriptField, self).__init__(name)
@@ -379,7 +465,7 @@ class ScriptField(StringField):
     def validate(self, val):
         return val is None or isinstance(val, str) or isinstance(val, bytes)
 
-    def to_json(self, val):
+    def from_dict(self, val):
         if isinstance(val, bytes):
             return val.decode()
         return val
@@ -434,7 +520,7 @@ class Transaction(object):
             fval = data.get(field.name)
             if not field.validate(fval):
                 raise ValueError("Invalid value for field %s" % field.name)
-            setattr(tx, field.name, field.to_json(fval))
+            setattr(tx, field.name, field.from_dict(fval))
         return tx
 
     def serialize(self):
@@ -585,9 +671,14 @@ class TransactionMassTransfer(Transaction):
 
 
 class TransactionData(Transaction):
-    # TODO
     tx_type = 12
     tx_name = 'data'
+    fields = (
+        SenderPublicKeyField(),
+        DataArrayField(),
+        FeeField(),
+        TimestampField()
+    )
 
 
 class TransactionSetScript(Transaction):

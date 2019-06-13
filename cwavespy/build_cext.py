@@ -19,6 +19,9 @@ bool waves_verify_message(const curve25519_public_key public_key, const unsigned
 ssize_t base58_decode(unsigned char *out, const char *in);
 size_t base58_encode(char* out, const unsigned char* in, size_t in_sz);
 
+ssize_t base64_decode(unsigned char *dst, const unsigned char *src);
+size_t base64_encode(unsigned char* dst, const unsigned char* src, size_t in_sz);
+
 typedef uint8_t tx_chain_id_t;
 typedef uint8_t tx_decimals_t;
 typedef uint64_t tx_fee_t;
@@ -111,7 +114,7 @@ typedef struct tx_data_s
     union {
         tx_data_integer_t integer;
         tx_data_boolean_t boolean;
-        tx_data_string_t binary;
+        tx_encoded_string_t binary;
         tx_data_string_t string;
     } types;
 } tx_data_t;
@@ -357,6 +360,7 @@ ffi.set_source("cwavespy._cext",
 """
      #include "waves/crypto.h"
      #include "waves/b58.h"
+     #include "waves/b64.h"
      #include "waves/tx.h"
 """,
      libraries=['waves_c', 'crypto'], library_dirs=['/usr/local/lib/waves'])

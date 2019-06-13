@@ -23,7 +23,7 @@ class _TestRandProvider(BaseProvider):
     def random_uint32(self):
         return self.random_int(min=0, max=(1 << 32) - 1)
 
-    def random_uin64(self):
+    def random_uint64(self):
         return self.random_int(min=0, max=(1 << 64)-1)
 
     def tx_chain_id(self):
@@ -34,16 +34,16 @@ class _TestRandProvider(BaseProvider):
         return self.random_byte()
 
     def tx_fee(self):
-        return self.random_uin64()
+        return self.random_uint64()
 
     def tx_timestamp(self):
-        return self.random_uin64()
+        return self.random_uint64()
 
     def tx_quantity(self):
-        return self.random_uin64()
+        return self.random_uint64()
 
     def tx_amount(self):
-        return self.random_uin64()
+        return self.random_uint64()
 
     def tx_public_key(self):
         seed = g_faker.sentence()
@@ -57,6 +57,9 @@ class _TestRandProvider(BaseProvider):
         pub_key = PublicKey.from_private_key(priv_key)
         addr = pub_key.to_address('M')
         return addr.b58_str
+
+    def random_bytes(self, n):
+        return bytes([self.random_byte() for i in range(n)])
 
     def random_b58(self, width):
         bs = bytes(self.random_byte() for i in range(width))
@@ -105,6 +108,30 @@ class _TestRandProvider(BaseProvider):
     def tx_transfers(self, n):
         return [self.tx_transfer_s() for i in range(n)]
 
+    def tx_data_value(self):
+        data_type = g_faker.random_element(elements=(0, 1, 3))
+        if data_type == 0:
+            return 'integer', self.random_uint64()
+        elif data_type == 1:
+            return 'boolean', g_faker.boolean()
+        elif data_type == 2:
+            return 'binary', self.random_bytes(64)
+        elif data_type == 3:
+            return 'string', g_faker.sentence()
+        else:
+            return '', None
+
+    def tx_data_entry(self):
+        dt, value = self.tx_data_value()
+        return {
+            'type': dt,
+            'key': g_faker.sentence(),
+            'value': value
+        }
+
+    def tx_data_array(self, n):
+        return [self.tx_data_entry() for i in range(n)]
+
     def tx_alias(self):
         return {
             'type': TransactionAlias.tx_type,
@@ -126,6 +153,15 @@ class _TestRandProvider(BaseProvider):
             'recipient': self.tx_recipient(),
             'attachment': self.tx_attachment()
          }
+
+    def tx_data(self):
+        return {
+            'type': TransactionData.tx_type,
+            'sender_public_key': self.tx_public_key(),
+            'data': self.tx_data_array(1),
+            'timestamp': self.tx_timestamp(),
+            'fee': self.tx_fee()
+        }
 
     def tx_mass_transfer(self):
         return {
@@ -239,6 +275,8 @@ def _faker():
 
 def _check_tx_fields(tx, data):
     for field in tx.fields:
+        if field.name == 'data':
+            continue
         assert getattr(tx, field.name) == data[field.name]
 
 
@@ -309,6 +347,10 @@ def test_tx_transfer(_faker):
 
 def test_tx_mass_transfer(_faker):
     _test_tx(_faker, TransactionMassTransfer)
+
+
+def test_tx_data(_faker):
+    _test_tx(_faker, TransactionData)
 
 
 def test_tx_burn(_faker):
