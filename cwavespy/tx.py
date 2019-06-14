@@ -23,9 +23,14 @@ def _add_strbuf(tx, val):
     return _tx_add_buf(tx, "char[]", val)
 
 
+def _to_camel_case(val):
+    return ''.join([s if i == 0 else s.title() for i, s in enumerate(val.split('_'))])
+
+
 class TransactionField(object):
-    def __init__(self, name):
+    def __init__(self, name, json_key=None):
         self.name = name
+        self.json_key = json_key
 
     def validate(self, val):
         return False
@@ -44,6 +49,9 @@ class TransactionField(object):
 
     def is_null(self, val):
         return True
+
+    def to_json(self, val):
+        return _to_camel_case(self.name), val
 
 
 def _check_uint(val, bits):
@@ -72,13 +80,20 @@ class OptionField(TransactionField):
             return None
         return self.field.deserialize(val)
 
+    def to_json(self, val):
+        k = _to_camel_case(self.name)
+        if val:
+            return k, self.field.to_json(val)[1]
+        else:
+            return k, None
+
 
 class StructField(TransactionField):
     fields = []
     ctype = None
 
-    def __init__(self, name):
-        super(StructField, self).__init__(name)
+    def __init__(self, name, **kwargs):
+        super(StructField, self).__init__(name, **kwargs)
 
     def validate(self, val):
         for field in self.fields:
@@ -100,10 +115,19 @@ class StructField(TransactionField):
             data[field.name] = fval_raw
         return data
 
+    def to_json(self, val):
+        data = {}
+        for field in self.fields:
+            k, jv = field.to_json(val.get(field.name, None))
+            if field.json_key:
+                k = field.json_key
+            data[k] = jv
+        return _to_camel_case(self.name), data
+
 
 class ArrayField(TransactionField):
-    def __init__(self, dtype, name):
-        super(ArrayField, self).__init__(name)
+    def __init__(self, dtype, name, **kwargs):
+        super(ArrayField, self).__init__(name, **kwargs)
         self.dtype = dtype
 
     def validate(self, val):
@@ -127,6 +151,9 @@ class ArrayField(TransactionField):
             fval = self.dtype.deserialize(val.array[i])
             data.append(fval)
         return data
+
+    def to_json(self, val):
+        return _to_camel_case(self.name), [self.dtype.to_json(v)[1] for v in val]
 
 
 class Base64Field(TransactionField):
@@ -281,6 +308,9 @@ class LongField(TransactionField):
     def validate(self, val):
         return _check_uint(val, 64)
 
+    def to_json(self, val):
+        return _to_camel_case(self.name), str(val)
+
 
 class StringField(TransactionField):
     def validate(self, val):
@@ -389,9 +419,16 @@ class RecipientField(TransactionField):
                 }
             }
 
+    def to_json(self, val):
+        rcpt_data = val['data']
+        if val['is_alias']:
+            jv = 'alias:%s:%s' % (chr(rcpt_data['alias']['chain_id']), rcpt_data['alias']['alias'])
+        else:
+            jv = rcpt_data['address']
+        return _to_camel_case(self.name), jv
+
 
 class TransferField(StructField):
-
     ctype = 'tx_transfer_t'
     fields = (
         RecipientField(),
@@ -400,6 +437,17 @@ class TransferField(StructField):
 
     def __init__(self, name='transfer'):
         super(TransferField, self).__init__(name)
+
+
+class PaymentField(StructField):
+    ctype = 'tx_payment_t'
+    fields = (
+        AmountField(),
+        OptionField(AssetIdField(), name='asset_id')
+    )
+
+    def __init__(self, name='payment', **kwargs):
+        super(PaymentField, self).__init__(name, **kwargs)
 
 
 class DataField(TransactionField):
@@ -444,6 +492,21 @@ class DataField(TransactionField):
         elif val.data_type == 3:
             return ffi.string(val.types.string.data).decode()
 
+    def to_json(self, val):
+        if isinstance(val, bool):
+            dt = 'boolean'
+        elif isinstance(val, int):
+            dt = 'integer'
+            val = str(val)
+        elif isinstance(val, str):
+            dt = 'string'
+        elif isinstance(val, bytes):
+            dt = 'binary'
+            val = 'base64:' + base64.b64encode(val).decode()
+        else:
+            dt = ''
+        return '', {'type': dt, 'value': val}
+
 
 class DataKeyValueField(StructField):
     ctype = 'tx_data_entry_t'
@@ -451,6 +514,74 @@ class DataKeyValueField(StructField):
         StringField(name='key'),
         DataField(name='value')
     )
+
+    def to_json(self, val):
+        dk, jv = self.fields[1].to_json(val['value'])
+        dk, djv = self.fields[0].to_json(val['key'])
+        jv[dk] = djv
+        return _to_camel_case(self.name), jv
+
+
+class FuncArgField(DataField):
+    ctype = 'tx_func_arg_t'
+
+    def __init__(self, name='func_arg'):
+        super(FuncArgField, self).__init__(name)
+
+    def serialize(self, tx, val):
+        if isinstance(val, bool):
+            if val:
+                return {'arg_type': 6, 'types': {'boolean': val}}
+            else:
+                return {'arg_type': 7, 'types': {'boolean': val}}
+        elif isinstance(val, int):
+            return {'arg_type': 0, 'types': {'integer': val}}
+        elif isinstance(val, str):
+            val_ = self.string_field.serialize(tx, val)
+            return {'arg_type': 2, 'types': {'string': val_}}
+        elif isinstance(val, bytes):
+            value_bytes = bytes(len(val)*2)
+            ret = lib.base64_encode(value_bytes, val, len(val))
+            val_ = {
+                'encoded_data': _add_strbuf(tx, value_bytes[0:ret]),
+                'decoded_data': _add_strbuf(tx, val),
+                'encoded_len': ret,
+                'decoded_len': len(val)
+            }
+            return {'arg_type': 1, 'types': {'binary': val_}}
+
+    def deserialize(self, val):
+        if val.arg_type == 0:
+            return int(val.types.integer)
+        elif val.arg_type == 1:
+            return ffi.string(val.types.binary.decoded_data)
+        elif val.arg_type == 2:
+            return ffi.string(val.types.string.data).decode()
+        elif val.arg_type == 6:
+            return True
+        elif val.arg_type == 7:
+            return False
+
+
+class FuncCallField(StructField):
+    fields = (
+        StringField('function'),
+        ArrayField(dtype=FuncArgField(), name='args')
+    )
+
+    def __init__(self, name='call'):
+        super(FuncCallField, self).__init__(name=name)
+
+    def null(self):
+        return {'valid': False }
+
+    def is_null(self, val):
+        return not val.valid
+
+    def serialize(self, tx, val):
+        data = super(FuncCallField, self).serialize(tx, val)
+        data['valid'] = True
+        return data
 
 
 class DataArrayField(ArrayField):
@@ -533,7 +664,7 @@ class Transaction(object):
             setattr(tx_data, field.name, fval_raw)
         buf_size = lib.waves_tx_buffer_size(tx)
         tx_buf = bytes(buf_size)
-        lib.waves_tx_to_bytes(tx_buf, tx)
+        ret = lib.waves_tx_to_bytes(tx_buf, tx)
         return tx_buf
 
     @staticmethod
@@ -554,6 +685,18 @@ class Transaction(object):
             fval = field.deserialize(fval_raw)
             setattr(tx, field.name, fval)
         return tx
+
+    def to_json(self):
+        data = {'type': self.tx_type}
+        for field in self.fields:
+            if not hasattr(self, field.name):
+                continue
+            fval = getattr(self, field.name)
+            k, jv = field.to_json(fval)
+            if field.json_key:
+                k = field.json_key
+            data[k] = jv
+        return data
 
 
 class TransactionIssue(Transaction):
@@ -656,6 +799,12 @@ class TransactionAlias(Transaction):
         TimestampField()
     ]
 
+    def to_json(self):
+        data = super(TransactionAlias, self).to_json()
+        data['alias'] = self.alias['alias']
+        data['chainId'] = self.alias['chain_id']
+        return data
+
 
 class TransactionMassTransfer(Transaction):
     tx_type = 11
@@ -719,9 +868,18 @@ class TransactionSetAssetScript(Transaction):
 
 
 class TransactionInvokeScript(Transaction):
-    # TODO
     tx_type = 16
     tx_name = 'invoke_script'
+    fields = (
+        ChainIdField(),
+        SenderPublicKeyField(),
+        RecipientField(name='d_app'),
+        OptionField(FuncCallField(), name='call'),
+        ArrayField(dtype=PaymentField(), name='payments', json_key='payment'),
+        FeeField(),
+        OptionField(AssetIdField(), name='fee_asset_id'),
+        TimestampField()
+    )
 
 
 def _get_all_tx_types():

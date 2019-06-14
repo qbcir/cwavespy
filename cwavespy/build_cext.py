@@ -133,7 +133,6 @@ typedef struct tx_data_entry_array_s
 
 typedef struct tx_payment_s
 {
-    tx_size_t length;
     tx_amount_t amount;
     tx_asset_id_t asset_id;
 } tx_payment_t;
@@ -174,13 +173,21 @@ typedef struct tx_func_arg_string_s
     uint32_t len;
 } tx_func_arg_string_t;
 
+typedef struct tx_func_arg_binary_s
+{
+    char* encoded_data;
+    char* decoded_data;
+    uint64_t encoded_len;
+    uint32_t decoded_len;
+} tx_func_arg_binary_t;
+
 typedef struct tx_func_arg_s
 {
     uint8_t arg_type;
     union {
         tx_func_arg_integer_t integer;
         tx_func_arg_boolean_t boolean;
-        tx_func_arg_string_t binary;
+        tx_func_arg_binary_t binary;
         tx_func_arg_string_t string;
     } types;
 } tx_func_arg_t;
@@ -193,7 +200,8 @@ typedef struct tx_func_arg_array_s
 
 typedef struct tx_func_call_s
 {
-    tx_func_arg_string_t function_name;
+    bool valid;
+    tx_func_arg_string_t function;
     tx_func_arg_array_t args;
 } tx_func_call_t;
 
@@ -309,8 +317,8 @@ typedef struct invoke_script_tx_bytes_s
 {
     tx_chain_id_t chain_id;
     tx_public_key_t sender_public_key;
-    tx_addr_or_alias_t dapp;
-    tx_func_call_t function_call;
+    tx_addr_or_alias_t d_app;
+    tx_func_call_t call;
     tx_payment_array_t payments;
     tx_fee_t fee;
     tx_asset_id_t fee_asset_id;

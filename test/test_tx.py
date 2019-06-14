@@ -99,6 +99,15 @@ class _TestRandProvider(BaseProvider):
             'alias': self.tx_network_alias()
         }
 
+    def tx_payment_s(self):
+        return {
+            'amount': self.tx_amount(),
+            'asset_id': self.tx_asset_id()
+        }
+
+    def tx_payments(self, n):
+        return [self.tx_payment_s() for i in range(n)]
+
     def tx_transfer_s(self):
         return {
             'recipient': self.tx_recipient(),
@@ -108,23 +117,50 @@ class _TestRandProvider(BaseProvider):
     def tx_transfers(self, n):
         return [self.tx_transfer_s() for i in range(n)]
 
-    def tx_data_value(self):
-        data_type = g_faker.random_element(elements=(0, 1, 3))
-        if data_type == 0:
+    def tx_func_arg_(self):
+        arg_type = g_faker.random_element(elements=(0, 2))
+        if arg_type == 0:
             return 'integer', self.random_uint64()
-        elif data_type == 1:
-            return 'boolean', g_faker.boolean()
-        elif data_type == 2:
+        elif arg_type == 1:
             return 'binary', self.random_bytes(64)
-        elif data_type == 3:
+        elif arg_type == 2:
             return 'string', g_faker.sentence()
+        elif arg_type == 6:
+            return 'boolean', True
+        elif arg_type == 7:
+            return 'boolean', False
         else:
             return '', None
 
-    def tx_data_entry(self):
-        dt, value = self.tx_data_value()
+    def tx_func_arg(self):
+        dt, value = self.tx_func_arg_()
+        return value
+
+    def tx_func_args(self, n):
+        return [self.tx_func_arg() for i in range(n)]
+
+    def tx_func_call(self, nargs):
         return {
-            'type': dt,
+            'function': g_faker.word(),
+            'args': self.tx_func_args(nargs)
+        }
+
+    def tx_data_value(self):
+        data_type = g_faker.random_element(elements=(0, 3))
+        if data_type == 0:
+            return  self.random_uint64()
+        elif data_type == 1:
+            return g_faker.boolean()
+        elif data_type == 2:
+            return self.random_bytes(64)
+        elif data_type == 3:
+            return g_faker.sentence()
+        else:
+            return None
+
+    def tx_data_entry(self):
+        value = self.tx_data_value()
+        return {
             'key': g_faker.sentence(),
             'value': value
         }
@@ -158,7 +194,7 @@ class _TestRandProvider(BaseProvider):
         return {
             'type': TransactionData.tx_type,
             'sender_public_key': self.tx_public_key(),
-            'data': self.tx_data_array(1),
+            'data': self.tx_data_array(4),
             'timestamp': self.tx_timestamp(),
             'fee': self.tx_fee()
         }
@@ -215,7 +251,6 @@ class _TestRandProvider(BaseProvider):
     def tx_lease(self):
         return {
             'type': TransactionLease.tx_type,
-            #FIXME
             'lease_asset_id': None,#self.tx_asset_id(),
             'sender_public_key': self.tx_public_key(),
             'recipient': self.tx_recipient(),
@@ -265,6 +300,19 @@ class _TestRandProvider(BaseProvider):
             'timestamp': self.tx_timestamp()
         }
 
+    def tx_invoke_script(self):
+        return {
+            'type': TransactionInvokeScript.tx_type,
+            'chain_id': self.tx_chain_id(),
+            'sender_public_key': self.tx_public_key(),
+            'd_app': self.tx_recipient(),
+            'payments': self.tx_payments(1),
+            'call': self.tx_func_call(4),
+            'fee': self.tx_fee(),
+            'fee_asset_id': self.tx_asset_id(),
+            'timestamp': self.tx_timestamp()
+        }
+
 
 @pytest.fixture(scope="session")
 def _faker():
@@ -273,11 +321,11 @@ def _faker():
     return g_faker
 
 
-def _check_tx_fields(tx, data):
-    for field in tx.fields:
-        if field.name == 'data':
-            continue
-        assert getattr(tx, field.name) == data[field.name]
+def _check_tx_fields(tx1, tx2):
+    j1 = tx1.to_dict()
+    j2 = tx2.to_dict()
+    for field in tx1.fields:
+        assert j1[field.name] == j2[field.name]
 
 
 def _bytes_to_hex(bs):
@@ -288,32 +336,8 @@ def _to_camel_case(val):
     return ''.join([s if i == 0 else s.title() for i, s in enumerate(val.split('_'))])
 
 
-def _to_serde_app_json(data):
-    if isinstance(data, dict):
-        data_ = {_to_camel_case(k): _to_serde_app_json(v) for k,v in six.iteritems(data)}
-        if 'chainId' in data_:
-            data_['chainId'] = 'M'
-        if 'alias' in data and isinstance(data['alias'], dict):
-            data_['chainId'] = 'M'
-            data_['alias'] = data['alias']['alias']
-        if 'recipient' in data:
-            rcpt_data = data['recipient']['data']
-            if data['recipient']['is_alias']:
-                data_['recipient'] = 'alias:%s:%s' % (chr(rcpt_data['alias']['chain_id']), rcpt_data['alias']['alias'])
-            else:
-                data_['recipient'] = rcpt_data['address']
-        return data_
-    elif isinstance(data, list):
-        data_ = [_to_serde_app_json(v) for v in data]
-        return data_
-    elif isinstance(data, bytes):
-        return data.decode()
-    else:
-        return str(data)
-
-
-def get_serialized_value(data):
-    app_data = _to_serde_app_json(data)
+def get_serialized_value(tx):
+    app_data = tx.to_json()
     print(app_data)
     resp = requests.post('http://127.0.0.1:3000/serialize', json=app_data)
     resp_json = resp.json()
@@ -328,13 +352,13 @@ def _test_tx(_faker, cls):
     gen_f = getattr(_faker, 'tx_%s' % cls.tx_name)
     data = gen_f()
     print("Generated:", data)
-    tx = Transaction.from_dict(data)
-    buf = tx.serialize()
-    expected = get_serialized_value(data)
+    tx1 = Transaction.from_dict(data)
+    buf = tx1.serialize()
+    expected = get_serialized_value(tx1)
     tx2 = Transaction.deserialize(buf)
     print("Deserialized:", tx2.to_dict())
     assert expected == _bytes_to_hex(buf)
-    _check_tx_fields(tx2, data)
+    _check_tx_fields(tx1, tx2)
 
 
 def test_tx_alias(_faker):
@@ -383,3 +407,7 @@ def test_tx_set_script(_faker):
 
 def test_tx_set_asset_script(_faker):
     _test_tx(_faker, TransactionSetAssetScript)
+
+
+def test_tx_invoke_script(_faker):
+    _test_tx(_faker, TransactionInvokeScript)
