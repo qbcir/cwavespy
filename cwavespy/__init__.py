@@ -1,4 +1,6 @@
-from .base import Base58DecodeError, base58_encode
+from .base import Base58DecodeError
+from .b58 import base58_encode, base58_decode
+from .b64 import base64_encode, base64_decode
 from .hash import secure_hash
 from .address import Address, AddressError
 from .private_key import PrivateKey, PrivateKeyError

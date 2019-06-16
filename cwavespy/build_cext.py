@@ -19,8 +19,8 @@ bool waves_verify_message(const curve25519_public_key public_key, const unsigned
 ssize_t base58_decode(unsigned char *out, const char *in);
 size_t base58_encode(char* out, const unsigned char* in, size_t in_sz);
 
-ssize_t base64_decode(unsigned char *dst, const unsigned char *src);
-size_t base64_encode(unsigned char* dst, const unsigned char* src, size_t in_sz);
+ssize_t base64_decode(unsigned char *dst, const char *src);
+size_t base64_encode(char* dst, const unsigned char* src, size_t in_sz);
 
 typedef uint8_t tx_chain_id_t;
 typedef uint8_t tx_decimals_t;
@@ -48,6 +48,19 @@ typedef tx_encoded_string_t tx_asset_id_t;
 typedef tx_encoded_string_t tx_lease_id_t;
 typedef tx_encoded_string_t tx_lease_asset_id_t;
 typedef tx_encoded_string_t tx_address_t;
+
+typedef uint32_t tx_array_size_t;
+typedef int64_t tx_array_ssize_t;
+typedef void (*tx_array_elem_destroy_func_t)(char*);
+
+typedef struct tx_array_s
+{
+    char* array;
+    tx_array_size_t len;
+    size_t elem_sz;
+    size_t capacity;
+    tx_array_elem_destroy_func_t elem_destructor;
+} tx_array_t;
 
 enum
 {
@@ -125,35 +138,17 @@ typedef struct tx_data_entry_s
     tx_data_t value;
 } tx_data_entry_t;
 
-typedef struct tx_data_entry_array_s
-{
-    tx_data_entry_t* array;
-    uint16_t len;
-} tx_data_entry_array_t;
-
 typedef struct tx_payment_s
 {
     tx_amount_t amount;
     tx_asset_id_t asset_id;
 } tx_payment_t;
 
-typedef struct tx_payment_array_s
-{
-    tx_payment_t* array;
-    uint16_t len;
-} tx_payment_array_t;
-
 typedef struct tx_transfer_s
 {
     tx_addr_or_alias_t recipient;
     tx_amount_t amount;
 } tx_transfer_t;
-
-typedef struct tx_transfer_array_s
-{
-    tx_transfer_t* array;
-    uint16_t len;
-} tx_transfer_array_t;
 
 enum
 {
@@ -192,17 +187,11 @@ typedef struct tx_func_arg_s
     } types;
 } tx_func_arg_t;
 
-typedef struct tx_func_arg_array_s
-{
-    uint32_t len;
-    tx_func_arg_t* array;
-} tx_func_arg_array_t;
-
 typedef struct tx_func_call_s
 {
     bool valid;
     tx_func_arg_string_t function;
-    tx_func_arg_array_t args;
+    tx_array_t args;
 } tx_func_call_t;
 
 typedef struct alias_tx_bytes_s
@@ -226,7 +215,7 @@ typedef struct burn_tx_bytes_s
 typedef struct data_tx_bytes_s
 {
     tx_public_key_t sender_public_key;
-    tx_data_entry_array_t data;
+    tx_array_t data;
     tx_fee_t fee;
     tx_timestamp_t timestamp;
 } data_tx_bytes_t;
@@ -254,7 +243,7 @@ typedef struct mass_transfer_tx_bytes_s
 {
     tx_public_key_t sender_public_key;
     tx_asset_id_t asset_id;
-    tx_transfer_array_t transfers;
+    tx_array_t transfers;
     tx_timestamp_t timestamp;
     tx_fee_t fee;
     tx_encoded_string_t attachment;
@@ -319,7 +308,7 @@ typedef struct invoke_script_tx_bytes_s
     tx_public_key_t sender_public_key;
     tx_addr_or_alias_t d_app;
     tx_func_call_t call;
-    tx_payment_array_t payments;
+    tx_array_t payments;
     tx_fee_t fee;
     tx_asset_id_t fee_asset_id;
     tx_timestamp_t timestamp;
@@ -355,12 +344,15 @@ typedef struct tx_bytes_s
         set_asset_script_tx_bytes_t set_asset_script;
         invoke_script_tx_bytes_t invoke_script;
     } data;
-} tx_bytes_t;
+} waves_tx_t;
 
 
-ssize_t waves_tx_from_bytes(tx_bytes_t* tx, const unsigned char *src);
-size_t waves_tx_to_bytes(unsigned char *dst, const tx_bytes_t* tx);
-size_t waves_tx_buffer_size(const tx_bytes_t* tx);
+int waves_tx_init(waves_tx_t* tx, uint8_t tx_type);
+waves_tx_t* waves_tx_load(const unsigned char *src);
+ssize_t waves_tx_from_bytes(waves_tx_t* tx, const unsigned char *src);
+size_t waves_tx_to_bytes(unsigned char *dst, const waves_tx_t* tx);
+size_t waves_tx_buffer_size(const waves_tx_t* tx);
+void waves_tx_destroy(waves_tx_t *tx);
 
 """)
 

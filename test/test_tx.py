@@ -345,6 +345,7 @@ def get_serialized_value(tx):
         print(resp_json['error'])
     assert 'error' not in resp_json
     print("Expected: ", resp_json['tx'])
+    tx3 = Transaction.from_json(resp_json['tx'])
     return resp_json['bin']
 
 

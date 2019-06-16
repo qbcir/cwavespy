@@ -1,6 +1,5 @@
 import inspect
 import sys
-import binascii
 import base64
 import weakref
 
@@ -25,6 +24,18 @@ def _add_strbuf(tx, val):
 
 def _to_camel_case(val):
     return ''.join([s if i == 0 else s.title() for i, s in enumerate(val.split('_'))])
+
+
+def _field_name_from_camel_case(s):
+    prev = 0
+    ss = []
+    for i, c in enumerate(s):
+        if c.istitle():
+            ss.append(s[prev].lower() + s[prev+1:i])
+            prev = i
+    if len(s) != 0:
+        ss.append(s[prev].lower() + s[prev+1:len(s)])
+    return '_'.join(ss)
 
 
 class TransactionField(object):
@@ -52,6 +63,9 @@ class TransactionField(object):
 
     def to_json(self, val):
         return _to_camel_case(self.name), val
+
+    def from_json(self, val):
+        return val
 
 
 def _check_uint(val, bits):
@@ -86,6 +100,10 @@ class OptionField(TransactionField):
             return k, self.field.to_json(val)[1]
         else:
             return k, None
+
+    def from_json(self, val):
+        if val:
+            return self.field.from_json(val)
 
 
 class StructField(TransactionField):
@@ -124,6 +142,16 @@ class StructField(TransactionField):
             data[k] = jv
         return _to_camel_case(self.name), data
 
+    def from_json(self, val):
+        data = {}
+        for field in self.fields:
+            if field.json_key:
+                k = field.json_key
+            else:
+                k = _to_camel_case(field.name)
+            data[k] = field.from_json(val.get(k, None))
+        return data
+
 
 class ArrayField(TransactionField):
     def __init__(self, dtype, name, **kwargs):
@@ -140,20 +168,29 @@ class ArrayField(TransactionField):
         data = []
         for v in val:
             data.append(self.dtype.serialize(tx, v))
+        array = _tx_add_buf(tx, "%s[%d]" % (self.dtype.ctype, len(data)), data)
+        elem_sz = ffi.sizeof(self.dtype.ctype)
         return {
-            'array': _tx_add_buf(tx, "%s[%d]" % (self.dtype.ctype, len(data)), data),
-            'len': len(data)
+            'array': ffi.cast("char*", array),
+            'len': len(data),
+            'capacity': len(data)*elem_sz,
+            'elem_sz': elem_sz,
+            'elem_destructor': ffi.NULL
         }
 
     def deserialize(self, val):
         data = []
+        array = ffi.cast("%s[%d]" % (self.dtype.ctype, val.len), val.array)
         for i in range(val.len):
-            fval = self.dtype.deserialize(val.array[i])
+            fval = self.dtype.deserialize(array[i])
             data.append(fval)
         return data
 
     def to_json(self, val):
         return _to_camel_case(self.name), [self.dtype.to_json(v)[1] for v in val]
+
+    def from_json(self, val):
+        return [self.dtype.from_json(v) for v in val]
 
 
 class Base64Field(TransactionField):
@@ -277,36 +314,36 @@ class BoolField(TransactionField):
         return False if val == 0 else True
 
 
-class ByteField(TransactionField):
-    def __init__(self, name):
-        super(ByteField, self).__init__(name)
+class IntegerField(TransactionField):
+    def __init__(self, name, width, **kwargs):
+        super(IntegerField, self).__init__(name, **kwargs)
+        self.width = width
 
     def validate(self, val):
-        return _check_uint(val, 8)
+        return _check_uint(val, self.width)
+
+    def from_json(self, val):
+        return int(val)
 
 
-class ShortField(TransactionField):
+class ByteField(IntegerField):
     def __init__(self, name):
-        super(ShortField, self).__init__(name)
-
-    def validate(self, val):
-        return _check_uint(val, 16)
+        super(ByteField, self).__init__(name, 8)
 
 
-class IntField(TransactionField):
+class ShortField(IntegerField):
     def __init__(self, name):
-        super(IntField, self).__init__(name)
-
-    def validate(self, val):
-        return _check_uint(val, 32)
+        super(ShortField, self).__init__(name, 16)
 
 
-class LongField(TransactionField):
+class IntField(IntegerField):
     def __init__(self, name):
-        super(LongField, self).__init__(name)
+        super(IntField, self).__init__(name, 32)
 
-    def validate(self, val):
-        return _check_uint(val, 64)
+
+class LongField(IntegerField):
+    def __init__(self, name):
+        super(LongField, self).__init__(name, 64)
 
     def to_json(self, val):
         return _to_camel_case(self.name), str(val)
@@ -371,6 +408,13 @@ class AliasField(StructField):
     def __init__(self, name='alias'):
         super(AliasField, self).__init__(name)
 
+    def from_json(self, val):
+        prefix, chain_id, alias = val.split(':')
+        return {
+            'chain_id': ord(chain_id),
+            'alias': alias
+        }
+
 
 class RecipientField(TransactionField):
     def __init__(self, name='recipient'):
@@ -426,6 +470,22 @@ class RecipientField(TransactionField):
         else:
             jv = rcpt_data['address']
         return _to_camel_case(self.name), jv
+
+    def from_json(self, val):
+        if val.startswith('alias'):
+            return {
+                'is_alias': True,
+                'data': {
+                    'alias': self.alias_field.from_json(val)
+                }
+            }
+        else:
+            return {
+                'is_alias': False,
+                'data': {
+                    'address': self.address_field.from_json(val)
+                }
+            }
 
 
 class TransferField(StructField):
@@ -562,6 +622,9 @@ class FuncArgField(DataField):
         elif val.arg_type == 7:
             return False
 
+    def from_json(self, val):
+        return val['value']
+
 
 class FuncCallField(StructField):
     fields = (
@@ -573,7 +636,7 @@ class FuncCallField(StructField):
         super(FuncCallField, self).__init__(name=name)
 
     def null(self):
-        return {'valid': False }
+        return {'valid': False}
 
     def is_null(self, val):
         return not val.valid
@@ -655,7 +718,7 @@ class Transaction(object):
         return tx
 
     def serialize(self):
-        tx = ffi.new("tx_bytes_t*")
+        tx = ffi.new("waves_tx_t*")
         tx.type = self.tx_type
         tx_data = ffi.addressof(tx.data, self.tx_name)
         for field in self.fields:
@@ -674,12 +737,11 @@ class Transaction(object):
         if tx_cls is None:
             raise DeserializeError("No such transaction type: %d" % tx_type)
         tx = tx_cls()
-        tx_bytes = ffi.new("tx_bytes_t*")
+        tx_bytes = lib.waves_tx_load(buf)
+        if tx_bytes == ffi.NULL:
+            raise DeserializeError("Can't deserialize '%s' transaction field '%s'" % (tx_cls.tx_name, field.name))
+        tx_bytes = ffi.gc(tx_bytes, lib.waves_tx_destroy)
         tx_data = ffi.addressof(tx_bytes.data, tx_cls.tx_name)
-        tx_bytes.type = tx_type
-        ret = lib.waves_tx_from_bytes(tx_bytes, buf)
-        if ret < 0:
-            raise DeserializeError("Can't deserialize '%s' transaction" % tx_cls.tx_name)
         for field in tx_cls.fields:
             fval_raw = getattr(tx_data, field.name)
             fval = field.deserialize(fval_raw)
@@ -697,6 +759,37 @@ class Transaction(object):
                 k = field.json_key
             data[k] = jv
         return data
+
+    @staticmethod
+    def from_json(jdata):
+        tx_type = jdata['type']
+        tx_cls = _tx_types.get(tx_type)
+        if tx_cls is None:
+            raise DeserializeError("No such transaction type: %d" % tx_type)
+        tx = tx_cls()
+        if isinstance(tx, TransactionAlias):
+            chain_id = jdata['chainId']
+            if isinstance(chain_id, str):
+                try:
+                    chain_id = chr(int(chain_id))
+                except ValueError:
+                    pass
+            elif isinstance(chain_id, int):
+                chain_id = chr(chain_id)
+            jdata['alias'] = 'alias:%s:%s' % (chain_id, jdata['alias'])
+        for field in tx.fields:
+            fname = field.json_key if field.json_key else field.name
+            jk = _to_camel_case(fname)
+            if isinstance(field, OptionField) and jk not in jdata:
+                setattr(tx, field.name, None)
+            else:
+                jv = jdata[jk]
+                fval = field.from_json(jv)
+                if not field.validate(fval):
+                    raise DeserializeError("Can't load transaction (type='%d') field '%s' from json"
+                                           % (tx_type, field.name))
+                setattr(tx, field.name, fval)
+        return tx
 
 
 class TransactionIssue(Transaction):
