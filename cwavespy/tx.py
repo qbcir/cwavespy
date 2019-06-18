@@ -221,6 +221,12 @@ class Base64Field(TransactionField):
     def deserialize(self, val):
         return ffi.string(val.encoded_data).decode()
 
+    def from_json(self, val):
+        prefix = 'base64:'
+        if val.startswith(prefix):
+            return val[len(prefix):]
+        return val
+
 
 class Base58Field(TransactionField):
     def __init__(self, width, name):
@@ -686,6 +692,12 @@ class ScriptField(StringField):
             return None
         return ffi.string(val.encoded_data).decode()
 
+    def from_json(self, val):
+        prefix = 'base64:'
+        if val.startswith(prefix):
+            return val[len(prefix):]
+        return val
+
 
 class DeserializeError(Exception):
     pass
@@ -697,7 +709,8 @@ class Transaction(object):
     tx_name = None
 
     def to_dict(self):
-        data = {}
+        id_attr = getattr(self, 'id', None)
+        data = {'id': self.get_id() if not id_attr else id_attr}
         for field in self.fields:
             fval = getattr(self, field.name)
             data[field.name] = fval
@@ -710,6 +723,8 @@ class Transaction(object):
             raise ValueError("Transaction type is not defined")
         tx_cls = _tx_types[tx_type]
         tx = tx_cls()
+        tx_id = data.get('id')
+        tx_cls.id = tx_id
         for field in tx_cls.fields:
             fval = data.get(field.name)
             if not field.validate(fval):
@@ -717,7 +732,7 @@ class Transaction(object):
             setattr(tx, field.name, field.from_dict(fval))
         return tx
 
-    def serialize(self):
+    def _to_cstruct(self):
         tx = ffi.new("waves_tx_t*")
         tx.type = self.tx_type
         tx_data = ffi.addressof(tx.data, self.tx_name)
@@ -725,10 +740,20 @@ class Transaction(object):
             fval = getattr(self, field.name)
             fval_raw = field.serialize(tx, fval)
             setattr(tx_data, field.name, fval_raw)
+        return tx
+
+    def serialize(self):
+        tx = self._to_cstruct()
         buf_size = lib.waves_tx_buffer_size(tx)
         tx_buf = bytes(buf_size)
         ret = lib.waves_tx_to_bytes(tx_buf, tx)
         return tx_buf
+
+    def get_id(self):
+        tx = self._to_cstruct()
+        id_bytes = lib.waves_tx_id(tx)
+        id_bytes = ffi.gc(id_bytes, lib.waves_tx_destroy_string)
+        return ffi.string(id_bytes.data).decode()
 
     @staticmethod
     def deserialize(buf):
@@ -749,7 +774,7 @@ class Transaction(object):
         return tx
 
     def to_json(self):
-        data = {'type': self.tx_type}
+        data = {'type': self.tx_type, 'id': self.get_id()}
         for field in self.fields:
             if not hasattr(self, field.name):
                 continue
@@ -767,6 +792,7 @@ class Transaction(object):
         if tx_cls is None:
             raise DeserializeError("No such transaction type: %d" % tx_type)
         tx = tx_cls()
+        tx.id = jdata.get('id', None)
         if isinstance(tx, TransactionAlias):
             chain_id = jdata['chainId']
             if isinstance(chain_id, str):

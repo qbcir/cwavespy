@@ -354,6 +354,9 @@ size_t waves_tx_to_bytes(unsigned char *dst, const waves_tx_t* tx);
 size_t waves_tx_buffer_size(const waves_tx_t* tx);
 void waves_tx_destroy(waves_tx_t *tx);
 
+tx_string_t* waves_tx_id(waves_tx_t* tx);
+void waves_tx_destroy_string(tx_string_t* id);
+
 """)
 
 ffi.set_source("cwavespy._cext",

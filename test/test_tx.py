@@ -346,7 +346,7 @@ def get_serialized_value(tx):
     assert 'error' not in resp_json
     print("Expected: ", resp_json['tx'])
     tx3 = Transaction.from_json(resp_json['tx'])
-    return resp_json['bin']
+    return resp_json['bin'], tx3
 
 
 def _test_tx(_faker, cls):
@@ -355,7 +355,7 @@ def _test_tx(_faker, cls):
     print("Generated:", data)
     tx1 = Transaction.from_dict(data)
     buf = tx1.serialize()
-    expected = get_serialized_value(tx1)
+    expected, expected_tx = get_serialized_value(tx1)
     tx2 = Transaction.deserialize(buf)
     print("Deserialized:", tx2.to_dict())
     assert expected == _bytes_to_hex(buf)
