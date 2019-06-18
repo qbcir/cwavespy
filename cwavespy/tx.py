@@ -6,6 +6,7 @@ import weakref
 import six
 
 from ._cext import ffi, lib
+from .signature import Signature
 
 _g_weakrefs = weakref.WeakKeyDictionary()
 
@@ -708,6 +709,17 @@ class Transaction(object):
     fields = []
     tx_name = None
 
+    def __init__(self):
+        self.proofs = []
+
+    def add_proof(self, pk, i=None):
+        tx_bytes = self.serialize()
+        proof = pk.sign(tx_bytes)
+        if i is None:
+            self.proofs.insert(0, proof)
+        else:
+            self.proofs.append(proof)
+
     def to_dict(self):
         id_attr = getattr(self, 'id', None)
         data = {'id': self.get_id() if not id_attr else id_attr}
@@ -783,6 +795,7 @@ class Transaction(object):
             if field.json_key:
                 k = field.json_key
             data[k] = jv
+        data['proofs'] = [p.b58_str for p in self.proofs]
         return data
 
     @staticmethod
@@ -815,6 +828,7 @@ class Transaction(object):
                     raise DeserializeError("Can't load transaction (type='%d') field '%s' from json"
                                            % (tx_type, field.name))
                 setattr(tx, field.name, fval)
+        tx.proofs = [Signature(p) for p in jdata['proofs']]
         return tx
 
 
