@@ -352,8 +352,9 @@ class LongField(IntegerField):
     def __init__(self, name):
         super(LongField, self).__init__(name, 64)
 
-    def to_json(self, val):
-        return _to_camel_case(self.name), str(val)
+    #def to_json(self, val):
+    #    val_ = str(val) if val >= (1 << 32) else val
+    #    return _to_camel_case(self.name), val_
 
 
 class StringField(TransactionField):
@@ -706,6 +707,7 @@ class DeserializeError(Exception):
 
 class Transaction(object):
     tx_type = 0
+    tx_version = 0
     fields = []
     tx_name = None
 
@@ -786,7 +788,11 @@ class Transaction(object):
         return tx
 
     def to_json(self):
-        data = {'type': self.tx_type, 'id': self.get_id()}
+        data = {
+            'type': self.tx_type,
+            'id': self.get_id(),
+            'version': self.tx_version
+        }
         for field in self.fields:
             if not hasattr(self, field.name):
                 continue
@@ -834,6 +840,7 @@ class Transaction(object):
 
 class TransactionIssue(Transaction):
     tx_type = 3
+    tx_version = 2
     tx_name = 'issue'
     fields = (
         ChainIdField(),
@@ -851,6 +858,7 @@ class TransactionIssue(Transaction):
 
 class TransactionTransfer(Transaction):
     tx_type = 4
+    tx_version = 2
     tx_name = 'transfer'
     fields = (
         SenderPublicKeyField(),
@@ -866,6 +874,7 @@ class TransactionTransfer(Transaction):
 
 class TransactionReissue(Transaction):
     tx_type = 5
+    tx_version = 2
     tx_name = 'reissue'
     fields = [
         ChainIdField(),
@@ -880,6 +889,7 @@ class TransactionReissue(Transaction):
 
 class TransactionBurn(Transaction):
     tx_type = 6
+    tx_version = 2
     tx_name = 'burn'
     fields = (
         ChainIdField(),
@@ -899,6 +909,7 @@ class TransactionExchange(Transaction):
 
 class TransactionLease(Transaction):
     tx_type = 8
+    tx_version = 2
     tx_name = 'lease'
     fields = (
         LeaseAssetIdField(),
@@ -912,6 +923,7 @@ class TransactionLease(Transaction):
 
 class TransactionLeaseCancel(Transaction):
     tx_type = 9
+    tx_version = 2
     tx_name = 'lease_cancel'
     fields = (
         ChainIdField(),
@@ -924,6 +936,7 @@ class TransactionLeaseCancel(Transaction):
 
 class TransactionAlias(Transaction):
     tx_type = 10
+    tx_version = 2
     tx_name = 'alias'
     fields = [
         SenderPublicKeyField(),
@@ -941,6 +954,7 @@ class TransactionAlias(Transaction):
 
 class TransactionMassTransfer(Transaction):
     tx_type = 11
+    tx_version = 1
     tx_name = 'mass_transfer'
     fields = (
         SenderPublicKeyField(),
@@ -954,6 +968,7 @@ class TransactionMassTransfer(Transaction):
 
 class TransactionData(Transaction):
     tx_type = 12
+    tx_version = 1
     tx_name = 'data'
     fields = (
         SenderPublicKeyField(),
@@ -965,6 +980,7 @@ class TransactionData(Transaction):
 
 class TransactionSetScript(Transaction):
     tx_type = 13
+    tx_version = 1
     tx_name = 'set_script'
     fields = (
         ChainIdField(),
@@ -977,6 +993,7 @@ class TransactionSetScript(Transaction):
 
 class TransactionSponsorship(Transaction):
     tx_type = 14
+    tx_version = 1
     tx_name = 'sponsorship'
     fields = (
         SenderPublicKeyField(),
@@ -989,6 +1006,7 @@ class TransactionSponsorship(Transaction):
 
 class TransactionSetAssetScript(Transaction):
     tx_type = 15
+    tx_version = 1
     tx_name = 'set_asset_script'
     fields = (
         ChainIdField(),
@@ -1002,6 +1020,7 @@ class TransactionSetAssetScript(Transaction):
 
 class TransactionInvokeScript(Transaction):
     tx_type = 16
+    tx_version = 1
     tx_name = 'invoke_script'
     fields = (
         ChainIdField(),
