@@ -325,7 +325,11 @@ def _check_tx_fields(tx1, tx2):
     j1 = tx1.to_dict()
     j2 = tx2.to_dict()
     for field in tx1.fields:
-        assert j1[field.name] == j2[field.name]
+        fv = j1[field.name]
+        if isinstance(fv, tx.FieldBase) or isinstance(fv, list):
+            assert repr(j1[field.name]) == repr(j2[field.name])
+        else:
+            assert j1[field.name] == j2[field.name]
 
 
 def _bytes_to_hex(bs):

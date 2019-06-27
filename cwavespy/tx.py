@@ -44,8 +44,14 @@ class TransactionField(object):
         self.name = name
         self.json_key = json_key
 
+    def default(self):
+        return None
+
     def validate(self, val):
         return False
+
+    def to_dict(self, val):
+        return val
 
     def from_dict(self, val):
         return val
@@ -80,10 +86,21 @@ class OptionField(TransactionField):
         super(OptionField, self).__init__(name or field.name)
         self.field = field
 
+    def default(self):
+        return None
+
     def validate(self, val):
         if val is None:
             return True
         return self.field.validate(val)
+
+    def to_dict(self, val):
+        if val is not None:
+            return self.field.to_dict(val)
+
+    def from_dict(self, val):
+        if val is not None:
+            return self.field.from_dict(val)
 
     def serialize(self, tx, val):
         if val is None:
@@ -107,20 +124,104 @@ class OptionField(TransactionField):
             return self.field.from_json(val)
 
 
+class FieldBase(object):
+    fields = []
+    struct = None
+
+    def __init__(self, **kwargs):
+        _fields_map = {field.name: field for field in self.fields}
+        super(FieldBase, self).__setattr__('_fields_map', _fields_map)
+        for field in self.fields:
+            if field.name in kwargs:
+                fval = kwargs[field.name]
+                if not field.validate(fval):
+                    raise ValueError("Invalid value for '%s' field" % field.name)
+            else:
+                fval = field.default()
+            if isinstance(fval, dict):
+                fval = field.from_dict(fval)
+            super(FieldBase, self).__setattr__(field.name, fval)
+
+    def to_dict(self):
+        data = {}
+        for field in self.fields:
+            fval = getattr(self, field.name, None)
+            data[field.name] = field.to_dict(fval)
+        return data
+
+    def serialize_value(self, tx):
+        raw = {}
+        for field in self.fields:
+            fval_raw = field.serialize(tx, getattr(self, field.name, None))
+            raw[field.name] = fval_raw
+        return raw
+
+    def to_json(self):
+        data = {}
+        for field in self.fields:
+            k, jv = field.to_json(getattr(self, field.name, None))
+            if field.json_key:
+                k = field.json_key
+            data[k] = jv
+        return data
+
+    @classmethod
+    def from_json(cls, val):
+        data = {}
+        for field in cls.fields:
+            if field.json_key:
+                k = field.json_key
+            else:
+                k = _to_camel_case(field.name)
+            data[k] = field.from_json(val.get(k, None))
+        return cls(**data)
+
+    def __repr__(self):
+        f_s = ','.join(["%s=%r" % (field.name, getattr(self, field.name, None))
+                        for field in self.fields])
+        return "%s(%s)" % (type(self).__name__, f_s)
+
+
 class StructField(TransactionField):
     fields = []
     ctype = None
+    pytype = None
+
+    @property
+    def _pytype_valid(self):
+        return self.pytype and issubclass(self.pytype, FieldBase)
+
+    def _is_pytype(self, val):
+        return self._pytype_valid and isinstance(val, self.pytype)
+
+    @classmethod
+    def create_field_class(cls, name):
+        pytype = type(name, (FieldBase,), {
+            'fields': cls.fields,
+            'struct': cls
+        })
+        if cls.pytype is not None:
+            raise Exception("Python class is already defined for %s" % cls.__name__)
+        cls.pytype = pytype
+        return pytype
 
     def __init__(self, name, **kwargs):
         super(StructField, self).__init__(name, **kwargs)
 
+    def default(self):
+        return {field.name: field.default() for field in self.fields}
+
     def validate(self, val):
+        if self._is_pytype(val):
+            return True
         for field in self.fields:
             if not field.validate(val.get(field.name)):
                 return False
         return True
 
     def serialize(self, tx, val):
+        if self._is_pytype(val):
+            return val.serialize_value(tx)
         raw = {}
         for field in self.fields:
             fval_raw = field.serialize(tx, val.get(field.name))
@@ -132,16 +233,36 @@ class StructField(TransactionField):
         for field in self.fields:
             fval_raw = field.deserialize(getattr(val, field.name))
             data[field.name] = fval_raw
+        if self._pytype_valid:
+            return self.pytype(**data)
+        return data
+
+    def from_dict(self, val):
+        if self._pytype_valid:
+            return self.pytype(**val)
+        else:
+            return val
+
+    def to_dict(self, val):
+        if self._is_pytype(val):
+            return val.to_dict()
+        data = {}
+        for field in self.fields:
+            fval = getattr(self, field.name, None)
+            data[field.name] = field.to_dict(fval)
         return data
 
     def to_json(self, val):
+        f_key = _to_camel_case(self.name)
+        if self._is_pytype(val):
+            return f_key, val.to_json()
         data = {}
         for field in self.fields:
             k, jv = field.to_json(val.get(field.name, None))
             if field.json_key:
                 k = field.json_key
             data[k] = jv
-        return _to_camel_case(self.name), data
+        return f_key, data
 
     def from_json(self, val):
         data = {}
@@ -151,6 +272,8 @@ class StructField(TransactionField):
             else:
                 k = _to_camel_case(field.name)
             data[k] = field.from_json(val.get(k, None))
+        if self._pytype_valid:
+            return self.pytype(**data)
         return data
 
 
@@ -159,11 +282,17 @@ class ArrayField(TransactionField):
         super(ArrayField, self).__init__(name, **kwargs)
         self.dtype = dtype
 
+    def default(self):
+        return list()
+
     def validate(self, val):
         for v in val:
             if not self.dtype.validate(v):
                 return False
         return True
+
+    def from_dict(self, val):
+        return [self.dtype.from_dict(v) for v in val]
 
     def serialize(self, tx, val):
         data = []
@@ -311,6 +440,9 @@ class BoolField(TransactionField):
     def __init__(self, name):
         super(BoolField, self).__init__(name)
 
+    def default(self):
+        return False
+
     def validate(self, val):
         return isinstance(val, bool)
 
@@ -325,6 +457,9 @@ class IntegerField(TransactionField):
     def __init__(self, name, width, **kwargs):
         super(IntegerField, self).__init__(name, **kwargs)
         self.width = width
+
+    def default(self):
+        return 0
 
     def validate(self, val):
         return _check_uint(val, self.width)
@@ -358,6 +493,9 @@ class LongField(IntegerField):
 
 
 class StringField(TransactionField):
+    def default(self):
+        return ''
+
     def validate(self, val):
         return isinstance(val, str)
 
@@ -418,10 +556,10 @@ class AliasField(StructField):
 
     def from_json(self, val):
         prefix, chain_id, alias = val.split(':')
-        return {
-            'chain_id': ord(chain_id),
-            'alias': alias
-        }
+        return Alias(chain_id=ord(chain_id), alias=alias)
+
+
+Alias = AliasField.create_field_class('Alias')
 
 
 class RecipientField(TransactionField):
@@ -431,19 +569,28 @@ class RecipientField(TransactionField):
         self.alias_field = AliasField()
 
     def validate(self, val):
-        if isinstance(val, dict):
+        if isinstance(val, six.string_types):
+            return True
+        elif isinstance(val, Alias):
+            return True
+        elif isinstance(val, dict):
             if val.get('is_alias', False):
                 return self.alias_field.validate(val['data']['alias'])
             else:
                 return self.address_field.validate(val['data']['address'])
         return False
 
+    def from_dict(self, val):
+        if val.get('is_alias', False):
+            return self.alias_field.from_dict(val['data']['alias'])
+        else:
+            return self.address_field.from_dict(val['data']['address'])
+
     def deserialize(self, val):
         if val.is_alias:
-            data = {'alias': self.alias_field.deserialize(val.data.alias)}
+            return self.alias_field.deserialize(val.data.alias)
         else:
-            data = {'address': self.address_field.deserialize(val.data.address)}
-        return {'is_alias': val.is_alias, 'data':data}
+            return self.address_field.deserialize(val.data.address)
 
     def serialize(self, tx, val):
         if isinstance(val, six.string_types):
@@ -452,16 +599,6 @@ class RecipientField(TransactionField):
                 'data': {
                     'address': self.address_field.serialize(tx, val)
                 }
-            }
-        elif isinstance(val, dict):
-            is_alias = val.get('is_alias', False)
-            if is_alias:
-                alias_data = {'alias': self.alias_field.serialize(tx, val['data']['alias'])}
-            else:
-                alias_data = {'address': self.address_field.serialize(tx, val['data']['address'])}
-            return {
-                'is_alias': is_alias,
-                'data': alias_data
             }
         else:
             return {
@@ -472,28 +609,17 @@ class RecipientField(TransactionField):
             }
 
     def to_json(self, val):
-        rcpt_data = val['data']
-        if val['is_alias']:
-            jv = 'alias:%s:%s' % (chr(rcpt_data['alias']['chain_id']), rcpt_data['alias']['alias'])
+        if isinstance(val, six.string_types):
+            jv = val
         else:
-            jv = rcpt_data['address']
+            jv = 'alias:%s:%s' % (chr(val.chain_id), val.alias)
         return _to_camel_case(self.name), jv
 
     def from_json(self, val):
         if val.startswith('alias'):
-            return {
-                'is_alias': True,
-                'data': {
-                    'alias': self.alias_field.from_json(val)
-                }
-            }
+            return self.alias_field.from_json(val)
         else:
-            return {
-                'is_alias': False,
-                'data': {
-                    'address': self.address_field.from_json(val)
-                }
-            }
+            return self.address_field.from_json(val)
 
 
 class TransferField(StructField):
@@ -507,6 +633,9 @@ class TransferField(StructField):
         super(TransferField, self).__init__(name)
 
 
+Transfer = TransferField.create_field_class('Transfer')
+
+
 class PaymentField(StructField):
     ctype = 'tx_payment_t'
     fields = (
@@ -516,6 +645,73 @@ class PaymentField(StructField):
 
     def __init__(self, name='payment', **kwargs):
         super(PaymentField, self).__init__(name, **kwargs)
+
+
+Payment = PaymentField.create_field_class('Payment')
+
+
+class OrderTypeField(TransactionField):
+    def __init__(self, name='order_type'):
+        super(OrderTypeField, self).__init__(name=name)
+
+    def validate(self, val):
+        return val in ['sell', 'buy']
+
+    def serialize(self, tx, val):
+        return 1 if val == 'sell' else 0
+
+    def deserialize(self, val):
+        return 'sell' if val == 1 else 'buy'
+
+
+class AssetPairField(StructField):
+    fields = (
+        OptionField(AssetIdField(), name='ammount_asset'),
+        OptionField(AssetIdField(), name='price_asset')
+    )
+
+
+class OrderField(StructField):
+    fields = (
+        ByteField(name='version'),
+        OrderTypeField(),
+        AssetPairField(name='asset_pair'),
+        LongField(name='price'),
+        LongField(name='amount'),
+        TimestampField(),
+        LongField(name='expiration'),
+        LongField(name='matcher_fee'),
+        SenderPublicKeyField(name='matcher_public_key')
+    )
+
+
+class Order(FieldBase):
+    fields = OrderField.fields
+
+    def __init__(self, name, **kwargs):
+        super(Order, self).__init__(name=name, **kwargs)
+        self._proofs = []
+
+    @property
+    def proofs(self):
+        return self._proofs
+
+    def add_proof(self, pk, i=None):
+        tx_bytes = self.struct.serialize(self)
+        proof = pk.sign(tx_bytes)
+        if i is None:
+            self._proofs.insert(0, proof)
+        else:
+            self._proofs.append(proof)
+
+    def to_json(self):
+        data = super(Order, self).to_json()
+        if self.version == 1:
+            if len(self._proofs) >= 1:
+                data['signature'] = self.proofs[0].b58_str
+        else:
+            data['proofs'] = [p.b58_str for p in self._proofs]
+        return data
 
 
 class DataField(TransactionField):
@@ -650,9 +846,15 @@ class FuncCallField(StructField):
         return not val.valid
 
     def serialize(self, tx, val):
-        data = super(FuncCallField, self).serialize(tx, val)
+        if self._is_pytype(val):
+            data = val.serialize_value(tx)
+        else:
+            data = super(FuncCallField, self).serialize(tx, val)
         data['valid'] = True
         return data
+
+
+FuncCall = FuncCallField.create_field_class('FuncCall')
 
 
 class DataArrayField(ArrayField):
@@ -705,29 +907,41 @@ class DeserializeError(Exception):
     pass
 
 
-class Transaction(object):
+class Transaction(FieldBase):
     tx_type = 0
     tx_version = 0
     fields = []
     tx_name = None
+    _fields_map = {}
 
-    def __init__(self):
-        self.proofs = []
+    def __init__(self, **kwargs):
+        super(Transaction, self).__init__(**kwargs)
+        self._proofs = []
+
+    def __setattr__(self, key, value):
+        field = self._fields_map.get(key, None)
+        if field and not field.validate(value):
+            raise ValueError("Invalid value for field %s" % key)
+        super(Transaction, self).__setattr__(key, value)
+
+    @property
+    def proofs(self):
+        return self._proofs
 
     def add_proof(self, pk, i=None):
         tx_bytes = self.serialize()
         proof = pk.sign(tx_bytes)
         if i is None:
-            self.proofs.insert(0, proof)
+            self._proofs.insert(0, proof)
         else:
-            self.proofs.append(proof)
+            self._proofs.append(proof)
 
     def to_dict(self):
         id_attr = getattr(self, 'id', None)
         data = {'id': self.get_id() if not id_attr else id_attr}
         for field in self.fields:
             fval = getattr(self, field.name)
-            data[field.name] = fval
+            data[field.name] = field.to_dict(fval)
         return data
 
     @staticmethod
@@ -778,7 +992,7 @@ class Transaction(object):
         tx = tx_cls()
         tx_bytes = lib.waves_tx_load(buf)
         if tx_bytes == ffi.NULL:
-            raise DeserializeError("Can't deserialize '%s' transaction field '%s'" % (tx_cls.tx_name, field.name))
+            raise DeserializeError("Can't deserialize '%s' transaction field '%s'" % tx_cls.tx_name)
         tx_bytes = ffi.gc(tx_bytes, lib.waves_tx_destroy)
         tx_data = ffi.addressof(tx_bytes.data, tx_cls.tx_name)
         for field in tx_cls.fields:
@@ -801,7 +1015,7 @@ class Transaction(object):
             if field.json_key:
                 k = field.json_key
             data[k] = jv
-        data['proofs'] = [p.b58_str for p in self.proofs]
+        data['proofs'] = [p.b58_str for p in self._proofs]
         return data
 
     @staticmethod
@@ -834,7 +1048,7 @@ class Transaction(object):
                     raise DeserializeError("Can't load transaction (type='%d') field '%s' from json"
                                            % (tx_type, field.name))
                 setattr(tx, field.name, fval)
-        tx.proofs = [Signature(p) for p in jdata['proofs']]
+        tx._proofs = [Signature(p) for p in jdata['proofs']]
         return tx
 
 
@@ -905,6 +1119,17 @@ class TransactionExchange(Transaction):
     # TODO
     tx_type = 7
     tx_name = 'exchange'
+    tx_version = 2
+    fields = (
+        OrderField(name='order1'),
+        OrderField(name='order2'),
+        LongField(name='price'),
+        AmountField(),
+        FeeField(name='buy_matcher_fee'),
+        FeeField(name='sell_matcher_fee'),
+        FeeField(),
+        TimestampField()
+    )
 
 
 class TransactionLease(Transaction):
@@ -947,8 +1172,8 @@ class TransactionAlias(Transaction):
 
     def to_json(self):
         data = super(TransactionAlias, self).to_json()
-        data['alias'] = self.alias['alias']
-        data['chainId'] = self.alias['chain_id']
+        data['alias'] = self.alias.alias
+        data['chainId'] = self.alias.chain_id
         return data
 
 
