@@ -48,6 +48,7 @@ typedef tx_encoded_string_t tx_asset_id_t;
 typedef tx_encoded_string_t tx_lease_id_t;
 typedef tx_encoded_string_t tx_lease_asset_id_t;
 typedef tx_encoded_string_t tx_address_t;
+typedef tx_encoded_string_t tx_signature_t;
 
 typedef uint32_t tx_array_size_t;
 typedef int64_t tx_array_ssize_t;
@@ -194,6 +195,28 @@ typedef struct tx_func_call_s
     tx_array_t args;
 } tx_func_call_t;
 
+typedef struct tx_asset_pair_s
+{
+    tx_asset_id_t amount_asset;
+    tx_asset_id_t price_asset;
+} tx_asset_pair_t;
+
+typedef struct tx_order_s
+{
+    uint8_t version;
+    tx_public_key_t sender_public_key;
+    tx_public_key_t matcher_public_key;
+    tx_asset_pair_t asset_pair;
+    uint8_t order_type;
+    uint64_t price;
+    tx_amount_t amount;
+    tx_timestamp_t timestamp;
+    uint64_t expiration;
+    tx_fee_t matcher_fee;
+    tx_array_t proofs;
+    tx_signature_t signature;
+} tx_order_t;
+
 typedef struct alias_tx_bytes_s
 {
     tx_public_key_t sender_public_key;
@@ -219,6 +242,19 @@ typedef struct data_tx_bytes_s
     tx_fee_t fee;
     tx_timestamp_t timestamp;
 } data_tx_bytes_t;
+
+typedef struct exchange_tx_bytes_s
+{
+    uint8_t version;
+    tx_order_t order1;
+    tx_order_t order2;
+    tx_amount_t price;
+    tx_amount_t amount;
+    tx_fee_t buy_matcher_fee;
+    tx_fee_t sell_matcher_fee;
+    tx_fee_t fee;
+    tx_timestamp_t timestamp;
+} exchange_tx_bytes_t;
 
 typedef struct lease_cancel_tx_bytes_s
 {
@@ -333,6 +369,7 @@ typedef struct tx_bytes_s
         alias_tx_bytes_t alias;
         burn_tx_bytes_t burn;
         data_tx_bytes_t data;
+        exchange_tx_bytes_t exchange;
         lease_cancel_tx_bytes_t lease_cancel;
         lease_tx_bytes_t lease;
         issue_tx_bytes_t issue;
@@ -353,6 +390,9 @@ ssize_t waves_tx_from_bytes(waves_tx_t* tx, const unsigned char *src);
 size_t waves_tx_to_bytes(unsigned char *dst, const waves_tx_t* tx);
 size_t waves_tx_buffer_size(const waves_tx_t* tx);
 void waves_tx_destroy(waves_tx_t *tx);
+
+size_t waves_order_to_bytes(unsigned char* dst, const tx_order_t *src);
+size_t waves_order_bytes_size(const tx_order_t *v);
 
 tx_string_t* waves_tx_id(waves_tx_t* tx);
 void waves_tx_destroy_string(tx_string_t* id);

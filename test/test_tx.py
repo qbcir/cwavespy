@@ -168,6 +168,31 @@ class _TestRandProvider(BaseProvider):
     def tx_data_array(self, n):
         return [self.tx_data_entry() for i in range(n)]
 
+    def tx_order(self):
+        return {
+            'version': 2,
+            'order_type': 'sell',
+            'asset_pair': {
+                'amount_asset': self.tx_asset_id(),
+                'price_asset': self.tx_asset_id()
+            },
+            'price': self.random_uint64(),
+            'amount': self.tx_amount(),
+            'timestamp': self.tx_timestamp(),
+            'expiration': self.random_uint64(),
+            'matcher_fee': self.tx_fee(),
+            'sender_public_key': self.tx_public_key(),
+            'matcher_public_key': self.tx_public_key()
+        }
+
+    def tx_random_order(self):
+        data = self.tx_order()
+        order = tx.Order(**data)
+        seed = gen_new_seed()
+        pk = PrivateKey.from_seed(seed)
+        order.add_proof(pk)
+        return order.to_dict()
+
     def tx_alias(self):
         return {
             'type': TransactionAlias.tx_type,
@@ -197,6 +222,20 @@ class _TestRandProvider(BaseProvider):
             'data': self.tx_data_array(4),
             'timestamp': self.tx_timestamp(),
             'fee': self.tx_fee()
+        }
+
+    def tx_exchange(self):
+        return {
+            'version': 2,
+            'type': TransactionExchange.tx_type,
+            'order1': self.tx_random_order(),
+            'order2': self.tx_random_order(),
+            'price': self.random_uint64(),
+            'amount': self.tx_amount(),
+            'buy_matcher_fee': self.tx_fee(),
+            'sell_matcher_fee': self.tx_fee(),
+            'fee': self.tx_fee(),
+            'timestamp': self.tx_timestamp()
         }
 
     def tx_mass_transfer(self):
@@ -383,6 +422,10 @@ def test_tx_mass_transfer(_faker):
 
 def test_tx_data(_faker):
     _test_tx(_faker, TransactionData)
+
+
+def test_tx_exchange(_faker):
+    _test_tx(_faker, TransactionExchange)
 
 
 def test_tx_burn(_faker):

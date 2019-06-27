@@ -11,6 +11,10 @@ from .signature import Signature
 _g_weakrefs = weakref.WeakKeyDictionary()
 
 
+class TXError(Exception):
+    pass
+
+
 def _tx_add_buf(tx, dtype, val):
     buf = ffi.new(dtype, val)
     if not _g_weakrefs.get(tx, None):
@@ -127,6 +131,7 @@ class OptionField(TransactionField):
 class FieldBase(object):
     fields = []
     struct = None
+    cstruct = None
 
     def __init__(self, **kwargs):
         _fields_map = {field.name: field for field in self.fields}
@@ -136,11 +141,21 @@ class FieldBase(object):
                 fval = kwargs[field.name]
                 if not field.validate(fval):
                     raise ValueError("Invalid value for '%s' field" % field.name)
+                if isinstance(fval, dict):
+                    fval = field.from_dict(fval)
             else:
                 fval = field.default()
-            if isinstance(fval, dict):
-                fval = field.from_dict(fval)
             super(FieldBase, self).__setattr__(field.name, fval)
+
+    def to_cstruct(self):
+        if not self.cstruct:
+            raise TXError("Can't serialize %s cstruct isn't defined" % type(self).__name__)
+        cs = ffi.new("%s*" % self.cstruct)
+        for field in self.fields:
+            fval = getattr(self, field.name)
+            fval_raw = field.serialize(cs, fval)
+            setattr(cs, field.name, fval_raw)
+        return cs
 
     def to_dict(self):
         data = {}
@@ -359,6 +374,8 @@ class Base64Field(TransactionField):
 
 
 class Base58Field(TransactionField):
+    ctype = 'tx_encoded_string_t'
+
     def __init__(self, width, name):
         super(Base58Field, self).__init__(name)
         self.width = width
@@ -436,6 +453,16 @@ class AttachmentField(Base58Field):
         super(AttachmentField, self).__init__(width=None, name=name)
 
 
+class SignatureField(Base58Field):
+    def __init__(self, name='signature'):
+        super(SignatureField, self).__init__(64, name)
+
+
+class ProofField(Base58Field):
+    def __init__(self, name='proof'):
+        super(ProofField, self).__init__(None, name)
+
+
 class BoolField(TransactionField):
     def __init__(self, name):
         super(BoolField, self).__init__(name)
@@ -487,9 +514,9 @@ class LongField(IntegerField):
     def __init__(self, name):
         super(LongField, self).__init__(name, 64)
 
-    #def to_json(self, val):
-    #    val_ = str(val) if val >= (1 << 32) else val
-    #    return _to_camel_case(self.name), val_
+    def to_json(self, val):
+        val_ = str(val) if val >= (1 << 32) else val
+        return _to_camel_case(self.name), val_
 
 
 class StringField(TransactionField):
@@ -666,13 +693,18 @@ class OrderTypeField(TransactionField):
 
 class AssetPairField(StructField):
     fields = (
-        OptionField(AssetIdField(), name='ammount_asset'),
+        OptionField(AssetIdField(), name='amount_asset'),
         OptionField(AssetIdField(), name='price_asset')
     )
 
 
+AssetPair = AssetPairField.create_field_class('AssetPair')
+
+
 class OrderField(StructField):
     fields = (
+        SenderPublicKeyField(),
+        SenderPublicKeyField(name='matcher_public_key'),
         ByteField(name='version'),
         OrderTypeField(),
         AssetPairField(name='asset_pair'),
@@ -680,38 +712,102 @@ class OrderField(StructField):
         LongField(name='amount'),
         TimestampField(),
         LongField(name='expiration'),
-        LongField(name='matcher_fee'),
-        SenderPublicKeyField(name='matcher_public_key')
+        LongField(name='matcher_fee')
     )
+
+    def __init__(self, name, **kwargs):
+        super(OrderField, self).__init__(name=name, **kwargs)
+        self._proofs_field = ArrayField(ProofField(), 'proofs')
+        self._sig_field = SignatureField()
+
+    def _add_proofs_from_dict(self, val, data):
+        if val.version == 1:
+            sig = data.get('signature', None)
+            if sig:
+                val.add_proof_str(sig)
+        elif val.version == 2:
+            proofs = data.get('proofs', list())
+            for p in proofs:
+                val.add_proof_str(p)
+
+    def from_json(self, val):
+        ret = super(OrderField, self).from_json(val)
+        self._add_proofs_from_dict(ret, val)
+        return ret
+
+    def from_dict(self, val):
+        ret = super(OrderField, self).from_dict(val)
+        self._add_proofs_from_dict(ret, val)
+        return ret
+
+    def deserialize(self, val):
+        ret = super(OrderField, self).deserialize(val)
+        if val.version == 1:
+            ret.signature = self._sig_field.deserialize(val.signature)
+        elif val.version == 2:
+            ps = self._proofs_field.deserialize(val.proofs)
+            for p in ps:
+                ret.add_proof_str(p)
+        return ret
 
 
 class Order(FieldBase):
     fields = OrderField.fields
+    cstruct = 'tx_order_t'
 
-    def __init__(self, name, **kwargs):
-        super(Order, self).__init__(name=name, **kwargs)
+    def __init__(self, **kwargs):
+        super(Order, self).__init__(**kwargs)
+        self._proofs_field = ArrayField(ProofField(), 'proofs')
+        self._sig_field = SignatureField()
         self._proofs = []
 
     @property
     def proofs(self):
         return self._proofs
 
+    def add_proof_str(self, s):
+        self._proofs.append(Signature(s))
+
     def add_proof(self, pk, i=None):
-        tx_bytes = self.struct.serialize(self)
-        proof = pk.sign(tx_bytes)
+        cs = self.to_cstruct()
+        cs_bytes_size = lib.waves_order_bytes_size(cs)
+        cs_bytes = bytes(cs_bytes_size)
+        ret = lib.waves_order_to_bytes(cs_bytes, cs)
+        proof = pk.sign(cs_bytes)
         if i is None:
             self._proofs.insert(0, proof)
         else:
             self._proofs.append(proof)
 
-    def to_json(self):
-        data = super(Order, self).to_json()
+    def _add_proofs_to_dict(self, data):
         if self.version == 1:
             if len(self._proofs) >= 1:
                 data['signature'] = self.proofs[0].b58_str
         else:
             data['proofs'] = [p.b58_str for p in self._proofs]
+
+    def to_json(self):
+        data = super(Order, self).to_json()
+        self._add_proofs_to_dict(data)
         return data
+
+    def to_dict(self):
+        data = super(Order, self).to_dict()
+        self._add_proofs_to_dict(data)
+        return data
+
+    def serialize_value(self, tx):
+        raw = super(Order, self).serialize_value(tx)
+        if self.version == 1:
+            if len(self._proofs) >= 1:
+                raw['signature'] = self._sig_field.serialize(tx, self._proofs[0].b58_str)
+        elif self.version == 2:
+            ps = [p.b58_str for p in self._proofs]
+            raw['proofs'] = self._proofs_field.serialize(tx, ps)
+        return raw
+
+
+OrderField.pytype = Order
 
 
 class DataField(TransactionField):
@@ -986,13 +1082,16 @@ class Transaction(FieldBase):
     @staticmethod
     def deserialize(buf):
         tx_type = int(buf[0])
+        if tx_type == 0:
+            tx_type = int(buf[1])
         tx_cls = _tx_types.get(tx_type)
         if tx_cls is None:
             raise DeserializeError("No such transaction type: %d" % tx_type)
         tx = tx_cls()
         tx_bytes = lib.waves_tx_load(buf)
+
         if tx_bytes == ffi.NULL:
-            raise DeserializeError("Can't deserialize '%s' transaction field '%s'" % tx_cls.tx_name)
+            raise DeserializeError("Can't deserialize '%s' transaction" % tx_cls.tx_name)
         tx_bytes = ffi.gc(tx_bytes, lib.waves_tx_destroy)
         tx_data = ffi.addressof(tx_bytes.data, tx_cls.tx_name)
         for field in tx_cls.fields:
@@ -1116,11 +1215,11 @@ class TransactionBurn(Transaction):
 
 
 class TransactionExchange(Transaction):
-    # TODO
     tx_type = 7
     tx_name = 'exchange'
     tx_version = 2
     fields = (
+        ByteField(name='version'),
         OrderField(name='order1'),
         OrderField(name='order2'),
         LongField(name='price'),
