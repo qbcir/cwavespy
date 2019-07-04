@@ -369,6 +369,8 @@ def _check_tx_fields(tx1, tx2):
             assert repr(j1[field.name]) == repr(j2[field.name])
         else:
             assert j1[field.name] == j2[field.name]
+    assert j1['version'] == j2['version']
+    assert j1['id'] == j2['id']
 
 
 def _bytes_to_hex(bs):
@@ -404,8 +406,11 @@ def _test_tx(_faker, cls):
     expected, expected_tx = get_serialized_value(tx1)
     tx2 = Transaction.deserialize(buf)
     print("Deserialized:", tx2.to_dict())
+    if buf[0] == 0 and tx1.tx_type != TransactionExchange.tx_type:
+        buf = buf[1:]
     assert expected == _bytes_to_hex(buf)
     _check_tx_fields(tx1, tx2)
+    assert tx1.get_id() == expected_tx.id
 
 
 def test_tx_alias(_faker):

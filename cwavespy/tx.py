@@ -1034,7 +1034,10 @@ class Transaction(FieldBase):
 
     def to_dict(self):
         id_attr = getattr(self, 'id', None)
-        data = {'id': self.get_id() if not id_attr else id_attr}
+        data = {
+            'id': self.get_id() if not id_attr else id_attr,
+            'version': self.tx_version
+        }
         for field in self.fields:
             fval = getattr(self, field.name)
             data[field.name] = field.to_dict(fval)
@@ -1047,8 +1050,8 @@ class Transaction(FieldBase):
             raise ValueError("Transaction type is not defined")
         tx_cls = _tx_types[tx_type]
         tx = tx_cls()
-        tx_id = data.get('id')
-        tx_cls.id = tx_id
+        tx.id = data.get('id', None)
+        tx.tx_version = data.get('version', tx_cls.tx_version)
         for field in tx_cls.fields:
             fval = data.get(field.name)
             if not field.validate(fval):
@@ -1059,6 +1062,7 @@ class Transaction(FieldBase):
     def _to_cstruct(self):
         tx = ffi.new("waves_tx_t*")
         tx.type = self.tx_type
+        tx.version = self.tx_version
         tx_data = ffi.addressof(tx.data, self.tx_name)
         for field in self.fields:
             fval = getattr(self, field.name)
@@ -1066,11 +1070,13 @@ class Transaction(FieldBase):
             setattr(tx_data, field.name, fval_raw)
         return tx
 
-    def serialize(self):
+    def serialize(self, strip=False):
         tx = self._to_cstruct()
         buf_size = lib.waves_tx_buffer_size(tx)
         tx_buf = bytes(buf_size)
         ret = lib.waves_tx_to_bytes(tx_buf, tx)
+        if tx_buf[0] == 0 and strip and self.tx_type != TransactionExchange.tx_type:
+            return tx_buf[1:]
         return tx_buf
 
     def get_id(self):
@@ -1093,6 +1099,7 @@ class Transaction(FieldBase):
         if tx_bytes == ffi.NULL:
             raise DeserializeError("Can't deserialize '%s' transaction" % tx_cls.tx_name)
         tx_bytes = ffi.gc(tx_bytes, lib.waves_tx_destroy)
+        tx.tx_version = tx_bytes.version
         tx_data = ffi.addressof(tx_bytes.data, tx_cls.tx_name)
         for field in tx_cls.fields:
             fval_raw = getattr(tx_data, field.name)
@@ -1125,6 +1132,7 @@ class Transaction(FieldBase):
             raise DeserializeError("No such transaction type: %d" % tx_type)
         tx = tx_cls()
         tx.id = jdata.get('id', None)
+        tx.tx_version = jdata.get('version', tx_cls.tx_version)
         if isinstance(tx, TransactionAlias):
             chain_id = jdata['chainId']
             if isinstance(chain_id, str):
@@ -1219,7 +1227,6 @@ class TransactionExchange(Transaction):
     tx_name = 'exchange'
     tx_version = 2
     fields = (
-        ByteField(name='version'),
         OrderField(name='order1'),
         OrderField(name='order2'),
         LongField(name='price'),

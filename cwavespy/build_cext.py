@@ -22,6 +22,7 @@ size_t base58_encode(char* out, const unsigned char* in, size_t in_sz);
 ssize_t base64_decode(unsigned char *dst, const char *src);
 size_t base64_encode(char* dst, const unsigned char* src, size_t in_sz);
 
+typedef uint8_t tx_version_t;
 typedef uint8_t tx_chain_id_t;
 typedef uint8_t tx_decimals_t;
 typedef uint64_t tx_fee_t;
@@ -62,33 +63,6 @@ typedef struct tx_array_s
     size_t capacity;
     tx_array_elem_destroy_func_t elem_destructor;
 } tx_array_t;
-
-enum
-{
-    TX_VERSION_0 = 0,
-    TX_VERSION_1 = 1,
-    TX_VERSION_2 = 2
-};
-
-enum
-{
-    TRANSACTION_TYPE_GENESIS = 1,
-    TRANSACTION_TYPE_PAYMENT = 2,
-    TRANSACTION_TYPE_ISSUE = 3,
-    TRANSACTION_TYPE_TRANSFER = 4,
-    TRANSACTION_TYPE_REISSUE = 5,
-    TRANSACTION_TYPE_BURN = 6,
-    TRANSACTION_TYPE_EXCHANGE = 7,
-    TRANSACTION_TYPE_LEASE = 8,
-    TRANSACTION_TYPE_CANCEL_LEASE = 9,
-    TRANSACTION_TYPE_ALIAS = 10,
-    TRANSACTION_TYPE_MASS_TRANSFER = 11,
-    TRANSACTION_TYPE_DATA = 12,
-    TRANSACTION_TYPE_SET_SCRIPT = 13,
-    TRANSACTION_TYPE_SPONSORSHIP = 14,
-    TRANSACTION_TYPE_SET_ASSET_SCRIPT = 15,
-    TRANSACTION_TYPE_INVOKE_SCRIPT = 16
-};
 
 typedef struct tx_alias_s
 {
@@ -245,7 +219,6 @@ typedef struct data_tx_bytes_s
 
 typedef struct exchange_tx_bytes_s
 {
-    uint8_t version;
     tx_order_t order1;
     tx_order_t order2;
     tx_amount_t price;
@@ -365,6 +338,7 @@ typedef struct transfer_tx_bytes_s
 typedef struct tx_bytes_s
 {
     uint8_t type;
+    tx_version_t version;
     union {
         alias_tx_bytes_t alias;
         burn_tx_bytes_t burn;
@@ -382,7 +356,6 @@ typedef struct tx_bytes_s
         invoke_script_tx_bytes_t invoke_script;
     } data;
 } waves_tx_t;
-
 
 int waves_tx_init(waves_tx_t* tx, uint8_t tx_type);
 waves_tx_t* waves_tx_load(const unsigned char *src);
